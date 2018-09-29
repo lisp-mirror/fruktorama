@@ -29,13 +29,15 @@ The highscore is saved locally as "poäng.txt".
 ## Some implementation notes
 
 The game is structured around widgets and windows. These provide sufficient abstraction
-above the SDL framework.
+above the SDL framework. At the core is the window stack defined in `window.lisp`.
 
 ### Windows
 
-A window is defined with `DEFWINDOW` which puts all the windows, in order of
-definition, on the window stack. It's a bit static at the moment. They are then
-drawn from the bottom up. Input is handled in the reverse order.
+A window is defined with `DEFWINDOW` which puts the window on the window stack.
+All defined windows are put on the stack in the order of definition. They are then
+drawn from the bottom up; background before foreground. Input on the other hand
+is processed using the reverse order. Input is first given to top window and then
+propagates down until it is handled.
 
 Each window has two important properties: `VISIBLE` and `ACTIVE`. A window
 needs to be visible in order to be drawn and receive input. Hidden windows are
@@ -50,9 +52,9 @@ example, the background window is defined as:
 ````
 
 It is visible, but not active. It contains one widget, the `IMAGE-WIDGET`
-returned from `(MAKE-IAMGE)`. It also has no name, hence the `NIL`.
+returned from `(MAKE-IMAGE)`. It also has no name, hence the `NIL`.
 
-This simple window can be contrasted with the `:HIGHSCORE` window:
+This simple window can be contrasted with the `HIGHSCORE` window:
 
 ````
 (defwindow :highscore 
@@ -102,13 +104,13 @@ This simple window can be contrasted with the `:HIGHSCORE` window:
                             t))))
 ````
 
-As said, it is named `:HIGHSCORE`. It also uses three types of widget to
+It uses three types of widget to
 construct the layout: `BOX-WIDGET`, `BAG-WIDGET` and `SCOREENTRY-WIDGET`.
 The `SCOREENTRY-WIDGET` is a widget for displaying entries in the highscore
 list. The other two are simple layout containers. The `BAG-WIDGET` sorts all
-its children according to its `:ALIGN`, in this case they will be centered
-vertically, from the top to the bottom, in the order of appearance in the list
-provided to `:WIDGETS`. The `BOX-WIDGET` adds padding around its child.
+its children according to its `ALIGN`, in this case they will be centered
+vertically without any overlap, from the top to the bottom in the order of definition.
+The `BOX-WIDGET` adds padding around its child.
 
 `TRAP-OPEN` is a callback which is called when the window is opened. And
 `TRAP-INPUT` is called when the window receives input. Both these operate on
@@ -116,16 +118,40 @@ the window level. Widgets themselves are also able to react to these event.
 
 Any input to a window will be forwarded to its children, unless there is a
 `TRAP-INPUT` in which case it gets first dibs. If the trap or any of its
-children decides to consume the input it returns `T` and the input propagation
-ends. If the final result is `NIL` the framework moves on to the next window.
+children decides to handle the input it returns `T` and the input propagation
+ends. If the final result for a window is `NIL` the framework moves on to the next window on the stack.
 
 ### Widgets
 
-All widgets derive from `WIDGET` which contain the default behavior. During
-definition all widget use relative offsets to build up the layout. Once done,
-absolute coordinates are calculated, and remain absolute throughout.
+All widgets derive from `WIDGET` which contain the default behavior. Widgets use
+relative offsets to construct their layout. They use
+`OFFSET-X` and `OFFSET-Y` on their children to order them. Absolute coordinates for
+all widgets are then calculated when the actual window is defined. All coordinates
+currently remain absolute thereafter.
 
 The most basic widget is the `IMAGE-WIDGET` which paints an image.
+
+````
+(defstruct (image-widget (:include widget))
+  "The IMAGE-WIDGET paints a PIXMAP-DESCRIPTOR."
+  pixmap
+  (visible t))
+````
+
+Some widgets override `WIDGET-EVENT-PAINT` to handle painting explicitly, but
+otherwise most graphics painted ends with a call to an `IMAGE-WIDGET`.
+
+A `PIXMAP-DESCRIPTOR` is the lowest graphic entity. That's what's being painted.
+They are all loaded at startup, for example:
+
+````
+(defresource "graphics/background.png" renderer :background)
+````
+
+Widgets expect pixmap identifiers like `BACKGROUND`. They'll load the actual
+pixmap themselves.
+
+
 
 
 
