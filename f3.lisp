@@ -242,7 +242,7 @@
                                 (save-highscore-data)
                                 (open-window-by-id :highscore)
                                 t)
-                               (t
+                               ((key= key :scancode-escape)
                                  (close-window-by-id :highscore)
                                  (open-window-by-id :start-menu)
                                  t))))
