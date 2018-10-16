@@ -382,6 +382,9 @@
     
 (defun start ()
   (format t "Starting F3.~%")
+  (unless (probe-file "f3.asd")
+    (format t "You need to be in the Fruktorama 3 directory for all assets to load properly.~%")
+    (return-from start nil))
   (highscore:set-defaults '((1966 . (20 26 8))
                             (1752 . (24 28 24))
                             (1304 . (22 31 25))
