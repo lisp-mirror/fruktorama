@@ -655,7 +655,7 @@
                                 (set-state status% :place)))
                        (:gameover
                          (set-state status% :dead)
-                         (let ((pos (highscore-worthy? points%)))
+                         (let ((pos (highscore:worthy? points%)))
                            (if pos
                                (progn
                                  (flip-the-book-page (find-widget :emblem-book) pos)

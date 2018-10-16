@@ -908,7 +908,7 @@
 
 (defmethod set-score ((widget highscoreboard-widget) points)
   (unless (highscoreboard-widget-in-the-green widget)
-    (when (highscore-worthy? points)
+    (when (highscore:worthy? points)
       (setf (highscoreboard-widget-in-the-green widget) t)
       (setf (scoreboard-widget-pixmaps widget) 
             (highscoreboard-widget-green-pixmaps widget))))
