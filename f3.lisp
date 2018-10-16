@@ -2,6 +2,8 @@
 ;; Copyright Parasite Network 2018
 ;; GPL3
 
+(defparameter *HIGHSCORE-PATH* (merge-pathnames "poäng.txt"))  
+
 (defun define-resources (renderer)
   (format t "Loading resources.~%")
   
@@ -238,8 +240,8 @@
                :trap-input (lambda (window key)
                              (cond
                                ((key= key :scancode-c)
-                                (reinitialize-highscore-data)
-                                (save-highscore-data)
+                                (highscore:reset)
+                                (highscore:save-to *HIGHSCORE-PATH*)
                                 (open-window-by-id :highscore)
                                 t)
                                ((key= key :scancode-escape)
@@ -279,10 +281,10 @@
                :trap-input (lambda (window key)
                              (when (key= key :scancode-return)
                                (let ((entry (find-widget :winnerbox)))
-                                 (add-new-highscore
+                                 (highscore:add
                                    (get-entry-score entry)
                                    (get-entry-name entry))
-                                 (save-highscore-data)
+                                 (highscore:save-to *HIGHSCORE-PATH*)
                                  (close-window-by-id :enter-highscore)
                                  (open-window-by-id :highscore)))))
     
@@ -376,11 +378,16 @@
                                  
                                  (when *debug-widget-border* (paint-debug-borders renderer))
                                  
-                                 (sdl2:render-present renderer)))))    
+                                 (sdl2:render-present renderer)))))  
     
 (defun start ()
   (format t "Starting F3.~%")
-  (load-highscore-data)
+  (highscore:set-defaults '((1966 . (20 26 8))
+                            (1752 . (24 28 24))
+                            (1304 . (22 31 25))
+                            (714 . (0 15 0))
+                            (57 . (10 21 10))))
+  (highscore:load-from *HIGHSCORE-PATH*)
   (format t "Highscore loaded.~%")
   (initialize-sprites)
   (format t "Sprites initialized.~%")
@@ -413,64 +420,14 @@
   (ql:quickload "f3"))
 
 ;;------------------------------------------------------------------------------
-
-(defparameter *HIGHSCORE-PATH* (merge-pathnames "poäng.txt"))
-
-(defparameter *DEFAULT-HIGHSCORE-LIST*
-  '((1966 . (20 26 8))
-    (1752 . (24 28 24))
-    (1304 . (22 31 25))
-    (714 . (0 15 0))
-    (57 . (10 21 10)))
-  "An assoc list sorted from highest to lowest.
-  CAR is the points and CDR is a list of indexes from the NAMEBOX-WIDGET.")
-
-(defparameter *HIGHSCORE-LIST* nil)
-
-(defun highscore-worthy? (points)
-  "Returns true if the points are enough for the highscore list."
-  (position points *HIGHSCORE-LIST* :key #'car :test #'>=))
-
-(defun add-new-highscore (points name)
-  (setf *HIGHSCORE-LIST*
-        (butlast
-          (sort
-            (cons (cons points name) *HIGHSCORE-LIST*)
-             #'> 
-             :key #'car))))
-
-(defun reinitialize-highscore-data ()
-  (when (probe-file *HIGHSCORE-PATH*)
-    (delete-file *HIGHSCORE-PATH*))
-    (initialize-highscore-data))
-
-(defun initialize-highscore-data ()
-  (setf *HIGHSCORE-LIST* (copy-list *DEFAULT-HIGHSCORE-LIST*)))
-
-(defun load-highscore-data ()
-  (if (probe-file *HIGHSCORE-PATH*)
-    (with-open-file (in *HIGHSCORE-PATH* :direction :input :if-does-not-exist nil)
-                    (when in
-                      (let ((scores (read in)))
-                        (when scores
-                          (setf *HIGHSCORE-LIST* scores)))))
-    (initialize-highscore-data)))
-
-(defun save-highscore-data ()
-  (when (probe-file *HIGHSCORE-PATH*)
-    (delete-file *HIGHSCORE-PATH*))
-  (with-open-file (out *HIGHSCORE-PATH* 
-                       :direction :output 
-                       :if-does-not-exist :create
-                       :if-exists :overwrite)
-                  (write *HIGHSCORE-LIST* :stream out)))
     
 (defun load-higschore-entry (entry widget)
   (set-entry-score widget 0)
   (set-entry-name widget nil)
-  (when (< entry (length *HIGHSCORE-LIST*))
-    (let ((entry (nth entry *HIGHSCORE-LIST*)))
-      (when (let ((points (car entry))
-                  (name (cdr entry)))
-              (set-entry-score widget points)
-              (set-entry-name widget name))))))
+  (when (< entry (highscore:number-of-entries))
+    (let ((entry (highscore:get-entry entry)))
+      (when entry
+        (let ((points (car entry))
+              (name (cdr entry)))
+          (set-entry-score widget points)
+          (set-entry-name widget name))))))
