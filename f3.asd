@@ -10,10 +10,10 @@
 
   :components
   (
+    (:file "highscore")
     (:file "sprite")
     (:file "widget")
     (:file "window")
-    (:file "highscore")
     (:file "game")
     (:file "f3")
     ))
