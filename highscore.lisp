@@ -12,13 +12,17 @@
     :set-defaults
     :reset
     :delete-data
-    :get-entry))
+    :get-entry
+    :number-of-entries))
 
 (in-package :highscore)
 
 (defparameter *DEFAULT-HIGHSCORE-LIST* nil)
 
 (defparameter *HIGHSCORE-LIST* nil)
+
+(defun number-of-entries ()
+  (length *HIGHSCORE-LIST*))
 
 (defun set-defaults (defaults)
   "Must be an assoc list with each entry being (points . name)."
