@@ -165,11 +165,60 @@
   ;TODO
   t)
 
+;; IMAGE -> T | NIL
+(defun verify-image (image)
+  "Verifies the existence of the specified image."
+  (if (gethash image *pixmap-descriptors*)
+      t
+      nil))
+
+;; (LIST<LIST<IMAGE>>, FUN) -> T | NIL
+(defun verify-all (image-groups verifier)
+  (when image-groups
+    (when (listp image-groups)
+      (every (lambda (group)
+               (every (lambda (image)
+                        (let ((pixmap (get-pixmap image :on-failure-nil t)))
+                          (when pixmap
+                            (funcall verifier pixmap))))
+                      group))
+             image-groups))))
+
+;; LIST<LIST<IMAGE>> -> T | NIL
+(defun verify-images-existence (&rest image-groups)
+  "Verifies the existence of each image."
+  (verify-all image-groups (lambda (pixmap) t)))
+
+;; LIST<LIST<IMAGE>> -> T | NIL
+(defun verify-images-same-dimensions (&rest image-groups)
+  "Compares all images's dimensions to that of the first one."
+  (when image-groups
+    (let (target-width target-height)
+      (verify-all image-groups (lambda (pixmap)
+                                 (let ((width (pixmap-width pixmap))
+                                       (height (pixmap-height pixmap)))
+                                   (unless target-width
+                                     (setf target-width width)
+                                     (setf target-height height))
+                                   (and 
+                                     (equal width target-width)
+                                     (equal height target-height))))))))
+
 (defun get-pixmaps-array (ids)
   (let ((pixmaps (make-array (list (length ids)))))
     (loop for id in ids for i from 0 do
           (setf (aref pixmaps i) (get-pixmap id)))
-    pixmaps))       
+    pixmaps))
+
+;; (LIST<PIXMAP>) -> T | NIL
+(defun verify-pixmaps-dimensions (pixmaps)
+  (let ((height (pixmap-height (aref pixmaps 0)))
+        (width (pixmap-width (aref pixmaps 0))))
+    (every (lambda (pixmap)
+             (and
+               (equal height (pixmap-height pixmap))
+               (equal width (pixmap-width pixmap))))
+           pixmaps)))
 
 ;;------------------------------------------------------------------------------
 
@@ -312,7 +361,7 @@
 (defconstant TICKX 1)
 (defconstant TICKY 3)
 
-(defstruct sprite-descriptor
+(defstruct (sprite-descriptor (:constructor %new-sprite-descriptor))
   id
   init
   pixmap
@@ -323,6 +372,30 @@
   (acceleration (make-array '(4) :initial-contents '(0 0 0 0)))
   (jerk (make-array '(4) :initial-contents '(0 0 0 0))))
 
+#|
+(defclass sprite-descriptor-class ()
+  ((id           :initform nil :reader sprite-id           :initarg :id)
+   (pixmap       :initform nil :reader sprite-pixmap       :initarg :pixmap)
+   (transform-x  :initform nil :reader sprite-transform-x  :initarg :transform-x)
+   (transform-y  :initform nil :reader sprite-transform-y  :initarg :transform-y)
+   (pos          :initform nil :reader sprite-pos          :initarg :pos)
+   (velocity     :initform nil :reader sprite-velocity     :initarg :velocity)
+   (acceleration :initform nil :reader sprite-acceleration :initarg :acceleration)
+   (jerk         :initform nil :reader sprite-jerk         :initarg :jerk)))
+
+(defun make-sprite-descriptor-class (&key id pixmap pos velocity acceleration jerk transform-x transform-y)
+  (let ((sprite (make-instance 'sprite-descriptor-class
+                  :id id
+                  :pixmap pixmap
+                  :pos pos
+                  :velocity velocity
+                  :acceleration acceleration
+                  :jerk jerk
+                  :transform-x transform-x
+                  :transform-y transform-y)))
+    sprite))
+|#
+    
 (defmethod print-object ((sprite sprite-descriptor) stream)
   (format stream "[sprite-descriptor: ~A. pixmap-id: ~A. "
           (sprite-descriptor-id sprite)
@@ -356,6 +429,7 @@
 (defun sprite-absolute-bottom (sprite)
   (+ (sprite-y sprite) (pixmap-height (sprite-descriptor-pixmap sprite))))
 
+#|
 (defun make-sprite (&key id pixmap pos velocity acceleration jerk transform-x transform-y)
   (let ((sprite (make-sprite-descriptor
                   :id id
@@ -366,8 +440,55 @@
                   :jerk jerk
                   :transform-x transform-x
                   :transform-y transform-y)))
+    (fix-sprite sprite)
     sprite))
+|#
 
+(defun make-sprite (pixmap &key id (pos #(0 0)) (velocity #(0 0)) (acceleration #(0 0)) (jerk #(0 0)) transform-x transform-y)
+  (initialize-sprite (%new-sprite-descriptor)
+                     pixmap
+                     :id id 
+                     :pos pos 
+                     :velocity velocity 
+                     :acceleration acceleration 
+                     :jerk jerk 
+                     :transform-x transform-x 
+                     :transform-y transform-y))
+
+(defun initialize-sprite (object pixmap &key 
+                                 id 
+                                 (pos #(0 0)) 
+                                 (velocity #(0 0)) 
+                                 (acceleration #(0 0)) 
+                                 (jerk #(0 0)) 
+                                 transform-x 
+                                 transform-y)
+  (initialize-struct object
+                     :id id
+                     :pixmap pixmap
+                     :pos (make-array '(4) :initial-contents
+                                      (list (elt pos 0)
+                                            0
+                                            (elt pos 1)
+                                            0))
+                     :velocity (make-array '(4) :initial-contents
+                                           (list (elt velocity 0)
+                                                 0
+                                                 (elt velocity 1)
+                                                 0))
+                     :acceleration (make-array '(4) :initial-contents
+                                               (list (elt acceleration 0)
+                                                     0
+                                                     (elt acceleration 1)
+                                                     0))
+                     :jerk (make-array '(4) :initial-contents
+                                       (list (elt jerk 0)
+                                             0
+                                             (elt jerk 1)
+                                             0))
+                     :transform-x transform-x
+                     :transform-y transform-y))
+    
 (defun change-sprite-position (sprite px py)
   (let ((pos (sprite-descriptor-pos sprite)))
     (setf (sprite-descriptor-pos sprite)
@@ -441,36 +562,7 @@
                 (incf (aref dependant s) Δv)
                 (setf (aref depender xtick) tick))))))))
 
-(defun initialize-sprite (sprite tick)
-  (unless (sprite-descriptor-init sprite)
-    (with-slots ((pos% pos)
-                 (vel% velocity)
-                 (acc% acceleration)
-                 (jerk% jerk)) sprite
-                (setf pos% (make-array '(4) :initial-contents
-                                       (list (elt pos% 0)
-                                             tick
-                                             (elt pos% 1)
-                                             tick)))
-                (setf vel% (make-array '(4) :initial-contents
-                                       (list (elt vel% 0)
-                                             0
-                                             (elt vel% 1)
-                                             0)))
-                (setf acc% (make-array '(4) :initial-contents
-                                       (list (elt acc% 0)
-                                             0
-                                             (elt acc% 1)
-                                             0)))
-                (setf jerk% (make-array '(4) :initial-contents
-                                       (list (elt jerk% 0)
-                                             0
-                                             (elt jerk% 1)
-                                             0)))
-                (setf (sprite-descriptor-init sprite) t))))
-
 (defun paint-sprite (sprite renderer tick)
-  (initialize-sprite sprite tick)
   (update-movement sprite tick)
   (let ((pos (sprite-descriptor-pos sprite)))
     (let ((x (aref pos SPRITEX))

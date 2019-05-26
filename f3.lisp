@@ -126,6 +126,45 @@
                :active nil
                :widget (make-image :background))
     
+    #+nil(defwindow :enter-highscore
+               :visible nil
+               :active t
+               :place :center
+               :widget (make-bag
+                         :align :cross
+                         :widgets (list
+                                    (make-star-rain 
+                                      (list :yellow-star :red-star)
+                                      :startx (- (/ *WINDOW-WIDTH* 2) 25) 
+                                      :starty -50)
+                                    (make-image :sky)
+                                    (make-bag
+                                      :align :center
+                                      :spacing 20
+                                      :widgets (list
+                                                 (make-flipbook
+                                                   :id :emblem-book
+                                                   :images (list
+                                                             :1st-pokal
+                                                             :2nd-pokal
+                                                             :3rd-pokal
+                                                             :4th-pokal
+                                                             :5th-pokal))
+                                                 (make-scoreentry :black-large-alfabet 
+                                                                  green-large-numbers
+                                                                  :id :winnerbox
+                                                                  :editable t
+                                                                  :chevron :chevron)))))
+               :trap-input (lambda (window key)
+                             (when (key= key :scancode-return)
+                               (let ((entry (find-widget :winnerbox)))
+                                 (highscore:add
+                                   (get-entry-score entry)
+                                   (get-entry-name entry))
+                                 (highscore:save-to *HIGHSCORE-PATH*)
+                                 (close-window-by-id :enter-highscore)
+                                 (open-window-by-id :highscore)))))
+    
     (defwindow :title
                :visible t
                :active nil
@@ -148,17 +187,19 @@
                                     (make-bag
                                       :align :center
                                       :widgets (list
-                                                 (make-highscoreboard
+                                                 (make-highscore
+                                                   red-large-numbers
+                                                   green-large-numbers
                                                    :id :thescoreboard
                                                    :digits 5
-                                                   :green green-large-numbers
-                                                   :red red-large-numbers)
+                                                   :events t)
                                                  (make-game
                                                    :id :thegame
-                                                   :background :gamegrid
-                                                   :scoreboard-id :thescoreboard
-                                                   :particle-id :poppy)))
-                                    (make-particle-field :id :poppy)))
+                                                   :background :gamegrid)))
+                                    (make-image :s0 :id :debug-image-xxxxxxxxx :visible nil)
+                                    (make-particle-field 
+                                      :id :poppy 
+                                      :listen-events t)))
                :trap-open (lambda (window)
                             (reset-scoreboard (find-widget :thescoreboard))
                             (reset-game (find-widget :thegame))))
@@ -249,45 +290,6 @@
                                  (open-window-by-id :start-menu)
                                  t))))
     
-    (defwindow :enter-highscore
-               :visible nil
-               :active t
-               :place :center
-               :widget (make-bag
-                         :align :cross
-                         :widgets (list
-                                    (make-star-rain 
-                                      (list :yellow-star :red-star)
-                                      :startx (- (/ *WINDOW-WIDTH* 2) 25) 
-                                      :starty -50)
-                                    (make-image :sky)
-                                    (make-bag
-                                      :align :center
-                                      :spacing 20
-                                      :widgets (list
-                                                 (make-flipbook
-                                                   :id :emblem-book
-                                                   :images (list
-                                                             :1st-pokal
-                                                             :2nd-pokal
-                                                             :3rd-pokal
-                                                             :4th-pokal
-                                                             :5th-pokal))
-                                                 (make-scoreentry :black-large-alfabet 
-                                                                  green-large-numbers
-                                                                  :id :winnerbox
-                                                                  :editable t
-                                                                  :chevron :chevron)))))
-               :trap-input (lambda (window key)
-                             (when (key= key :scancode-return)
-                               (let ((entry (find-widget :winnerbox)))
-                                 (highscore:add
-                                   (get-entry-score entry)
-                                   (get-entry-name entry))
-                                 (highscore:save-to *HIGHSCORE-PATH*)
-                                 (close-window-by-id :enter-highscore)
-                                 (open-window-by-id :highscore)))))
-    
     (defwindow :help
                :active t
                :visible nil
@@ -306,32 +308,32 @@
                          :padding '(0 60 0 0)
                          :widget (make-menu
                                    :pointer (make-image :apple)
-                                   :entries (list
-                                              (make-menu-entry
-                                                :widget (the-target :play
-                                                                    (make-image :play))
+                                   :widgets (list
+                                              (make-menu-option
+                                                :local-id :play
+                                                :widget (make-image :play)
                                                 :action (lambda (menu selection)
                                                           (close-window-by-id :start-menu)
                                                           (close-window-by-id :title)
                                                           (open-window-by-id :gamegrid)))
-                                              (make-menu-entry
-                                                :widget (the-target :scores
-                                                                    (make-image :highscore))
+                                              (make-menu-option
+                                                :local-id :scores
+                                                :widget (make-image :highscore)
                                                 :action (lambda (menu selection)
                                                           (close-window-by-id :start-menu)
                                                           (open-window-by-id :highscore)))
-                                              (make-menu-entry
-                                                :widget (the-target :help
-                                                                    (make-image :help))
+                                              (make-menu-option
+                                                :local-id :help
+                                                :widget (make-image :help)
                                                 :action (lambda (menu selection)
                                                           (close-window-by-id :start-menu)
                                                           (open-window-by-id :help)))
-                                              (make-menu-entry
-                                                :widget (the-target :exit
-                                                                    (make-image :exit))
+                                              (make-menu-option
+                                                :local-id :exit
+                                                :widget (make-image :exit)
                                                 :action (lambda (menu selection)
                                                           (sdl2:push-event :quit)))))))
-    
+
     (defwindow :starfall
                :visible t
                :active t

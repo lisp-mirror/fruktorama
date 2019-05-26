@@ -423,18 +423,14 @@
   tick
   paused
   highlight
-  scoreboard-id
-  particle-id
   points
   fruit-pixmaps
   black-pixmaps)
 
 ; (&KEY) -> GAME-WIDGET
-(defun make-game (&key id background scoreboard-id particle-id bare)
+(defun make-game (&key id background bare)
   (let ((widget (make-game-widget 
-                  :id id 
-                  :scoreboard-id scoreboard-id
-                  :particle-id particle-id
+                  :id id
                   :width +GAME-WIDTH+
                   :height +GAME-HEIGHT+
                   :background-pixmap (unless bare 
@@ -445,12 +441,13 @@
       (setf (game-widget-black-pixmaps widget)
             (get-pixmaps-array (mapcar #'caddr *fruits*))))
     (initialize-game widget)
-    (format t "Created GAME-WIDGET: ~A.~%" id)
+    (format t " Created GAME-WIDGET: ~A.~%" id)
     widget))
 
 ; (GAME-WIDGET) -> GAME-WIDGET
 (defun reset-game (widget)
-  (initialize-game widget))
+  (initialize-game widget)
+  (dispatch-event :RESET-SCORE nil))
 
 ; (GAME-WIDGET) -> GAME-WIDGET
 (defun initialize-game (widget)
@@ -541,9 +538,10 @@
   (with-slots ((points% points)
                (scoreboard-id% scoreboard-id)) game
                (incf points% Δpoints)
-               (when scoreboard-id%
-                 (let ((scoreboard (find-widget scoreboard-id%)))
-                   (set-score scoreboard points%)))))
+               (dispatch-event :SET-SCORE points%)))
+               ;(when scoreboard-id%
+                 ;(let ((scoreboard (find-widget scoreboard-id%)))
+                   ;(set-score scoreboard points%)))))
 
 ; (INT) -> LIST<INT>
 (defun spawn-three-fruits (points)
@@ -577,21 +575,20 @@
     (+ 0 (random 60))))
 
 (defun create-fruit-particles (game blokks)
-  (let ((field-id (game-widget-particle-id game)))
-    (when field-id
-      (let ((field (find-widget field-id)))
-        (foreach-blokk blokks
-                       (lambda (x y element)
-                         (particle-field-add
-                           field
-                           (make-particle-sprite
-                             :pixmap (aref (game-widget-black-pixmaps game) element)
-                             :velocity (random-particle-velocity)
-                             :acceleration (random-particle-acceleration)
-                             :jerk (random-particle-jerk)
-                             :pos (list
-                                    (grid-effective-x x (widget-x game))
-                                    (grid-effective-y y (widget-y game)))))))))))
+  (foreach-blokk blokks
+                 (lambda (x y element)
+                   (format t "Dispatching (~A;~A)~%" x y)))
+  (foreach-blokk blokks
+                 (lambda (x y element)
+                   (dispatch-event :ADD-PARTICLE
+                                   (make-sprite
+                                     (aref (game-widget-black-pixmaps game) element)
+                                     :velocity (random-particle-velocity)
+                                     :acceleration (random-particle-acceleration)
+                                     :jerk (random-particle-jerk)
+                                     :pos (list
+                                            (grid-effective-x x (widget-x game))
+                                            (grid-effective-y y (widget-y game))))))))
 
 (defun update-game (game tick)
   "new      -> play | gameover

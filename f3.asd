@@ -14,6 +14,7 @@
     (:file "sprite")
     (:file "widget")
     (:file "window")
+    (:file "gadgets")
     (:file "game")
     (:file "f3")
     ))

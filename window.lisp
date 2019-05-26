@@ -3,15 +3,21 @@
 ;; GPL3
 
 (defstruct window
+  "The WINDOW is the root container for all widgets within a layer."
   widget
   active
   id
+  internal-id
+  internal-stack-pos ;; MAKE STACK ARRAY ADJUSTABLE AND PUSH AND SET INDEX
   visible
   group
   callback-open
   callback-close
   callback-input
   todo-paint-cache)
+
+(defparameter *WINDOWS* nil
+  "Defined windows.")
 
 (defparameter *WINDOW-INPUT-STACK* nil
   "Windows sorted in input order.")
@@ -36,6 +42,7 @@
 
 ; (INT, INT) -> NIL
 (defun initialize-windows (width height)
+  (setf *WINDOWS* (make-hash-table :test #'eq))
   (setf *WINDOW-PAINT-STACK* nil)
   (setf *WINDOW-INPUT-STACK* nil)
   (setf *NAMED-WINDOWS* (make-hash-table :test #'eq))
@@ -43,6 +50,8 @@
   (setf *DEBUG-WIDGET-BORDER* nil)
   (setf *WINDOW-WIDTH* width)
   (setf *WINDOW-HEIGHT* height)
+  (setf *MOUSE-MOVEMENT-TRACKER* nil)
+  (setf *MOUSE-CLICK-VECTOR* (make-array (list 5) :initial-element nil))
   nil)
 
 ; (INT, INT) -> INT
@@ -173,10 +182,31 @@
     (format t "Initializing window: ~A.~%" (window-id window))
     (let ((widget (window-widget window)))
       (when widget
+        (setf (widget-window widget) (window-internal-id window))
         (widget-propagate-init widget)))))
 
+(defun get-window-widget-xy (window x y)
+  (when (window-visible window)
+    (when (window-active window)
+      (get-widget-at (window-widget window) x y))))
+
+(defun get-widget-xy-in-stack (stack x y)
+  (some (lambda (window)
+          (get-window-widget-xy window x y))
+        stack))
+
+(defun get-widget-xy (x y)
+  (get-widget-xy-in-stack *WINDOW-INPUT-STACK* x y))
+
+(defun get-widget-xy-below (window x y)
+  (let ((pos (position window *WINDOW-INPUT-STACK*)))
+    (if pos
+        (get-widget-xy-in-stack (nthcdr (1+ pos) *WINDOW-INPUT-STACK*) x y)
+        (get-widget-xy-in-stack *WINDOW-INPUT-STACK* x y))))
+
 ; (&KEY) -> NIL
-(defun defwindow (id &key
+;; FIXME SHOULD BE A MACRO
+(defun defwindow% (id &key
                      (active nil) 
                      (visible nil) 
                      (widget nil) 
@@ -184,14 +214,11 @@
                      (trap-input nil) 
                      (trap-open nil) 
                      (trap-close nil)
-                     (group nil)
-                     (disabled nil))
+                     (group nil))
   "Creates a window, pushes it on the stack and register it name."
-  (when disabled
-    (return-from defwindow nil))
-  (format t "(defwindow) ~A.~%" id)
   (let ((window (make-window
              :id id
+             :internal-id (gensym)
              :widget widget
              :active active
              :visible visible
@@ -211,35 +238,51 @@
                 (list
                   (destructuring-bind (x y) place
                                       (setf (widget-x widget) x)
-                                      (setf (widget-y widget) y)
-                                      ;(widget-event-absolute-xy widget)
-                                      ))
+                                      (setf (widget-y widget) y)))
                 (otherwise
                   (error "Unknown placement designator ~A." place)))
-      (calculate-absolute-coordinates widget)
+      (calculate-absolute-coordinates-in-window window)
       (register-widgets widget))
     (when group
       (add-window-to-group group window))
     (push-window window)
     (when visible
       (open-window window))
-    (format t "Defined window: ~A.~%" id)
+    (setf (gethash (window-internal-id window) *WINDOWS*) window)
     nil))
+
+(defmacro defwindow (id &key
+                        (active nil) 
+                        (visible nil) 
+                        (widget nil) 
+                        (place '(0 0)) 
+                        (trap-input nil) 
+                        (trap-open nil) 
+                        (trap-close nil)
+                        (group nil)
+                        (disabled nil))
+  (unless disabled
+    `(progn
+       (format t "Creating window: ~A.~%" ,id)
+       (defwindow% ,id 
+                   :active ,active
+                   :visible ,visible
+                   :widget ,widget
+                   :place (quote ,place)
+                   :trap-open ,trap-open
+                   :trap-close ,trap-close
+                   :group ,group)
+       (format t "Done.~%~%"))))
 
 ;;------------------------------------------------------------------------------
 
-(defun calculate-absolute-coordinates (widget)
-  "Traverses the widget tree and calculates all widgets absolute positions."
-  (each-widget-child widget child
-    (setf (widget-x child)
-          (+
-            (widget-offset-x child)
-            (widget-x widget)))
-    (setf (widget-y child)
-          (+
-            (widget-offset-y child)
-            (widget-y widget)))
-    (calculate-absolute-coordinates child)))
+
+
+(defun calculate-absolute-coordinates-in-window (window)
+  "Traverses the widget tree and calculates all widgets absolute positions.
+  ALSO SETS THE WINDOW PROPERTY ON EACH WIDGET" 
+  (format t "Calculating absolute xy.~%") 
+  (widget-propagate-calculate-xy (window-widget window)))
 
 (defun register-widgets (widget)
   "Traverses the widget tree and calls REGISTER-WIDGET on each widget."
@@ -248,28 +291,30 @@
     (each-widget-child widget child
                        (register-widgets child))))
 
-; (SDL2:KEY) -> T | NIL
+;; (KEY) -> T | NIL
 (defun window-event-onkey-down (key)
-  "An input event is propagated through the input stack until
-  a window's widget says it has dealt with it by returning true."
-  (catch 'onkey-event-success
-    (dolist (window *WINDOW-INPUT-STACK* nil)
-      ; Only visible windows can accept input.
-      (when (window-visible window)
-        ; And the window must be active.
-        (when (window-active window)
-          (format t "Input propagated to window: ~A.~%" (window-id window))
-          ; The Window's input callback takes precedence.
-          (when (window-callback-input window)
-            (when (funcall (window-callback-input window) window key)
-              (format t "  Handled by trap callback: ~A.~%" (window-id window))
-              (throw 'onkey-event-success t)))
-          ; Propagate to the window's widget.
-          (when (window-widget window)
-            (widget-propagate-onkey-down (window-widget window) key)))))
-    (format t "  DISCARDED.~%")
-    nil))
+  (let ((handled (bubble-key key)))
+    (unless handled
+      (format t "   KEY DISCARDED.~%"))
+    handled))
 
+;; (KEY) -> T | NIL
+(defun bubble-key (key)
+  (some (lambda (window)
+          (when (window-visible window)
+            (when (window-active window)
+              (format t "Key given to window: ~A.~%" (window-id window))
+              (bubble-into key window))))
+        *WINDOW-INPUT-STACK*))
 
+(defun bubble-into (key window)
+  (if (bubble-callback key window)
+      t
+      (when (window-widget window)
+        (widget-propagate-onkey-down (window-widget window) key))))
 
-
+(defun bubble-callback (key window)
+  (when (window-callback-input window)
+    (when (funcall (window-callback-input window) window key)
+      (format t "Key handled by window trap: ~A.~%" (window-id window))
+      t)))

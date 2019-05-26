@@ -35,6 +35,7 @@
   (b 255);(random 256))
   (a 0))
 
+(defparameter +WHITE+ (make-color :r 255 :g 255 :b 255))
 (defparameter +RED+ (make-color :r 255 :g 0 :b 0))
 (defparameter +BLACK+ (make-color :r 0 :g 0 :b 0))
 (defparameter +ALPHA+ (make-color :r 0 :g 0 :b 0 :a 255))
@@ -50,13 +51,13 @@
                               (color-a color)))
 
 ; WIDGET -> SDL2:RECT
-(defun self-rectangle (widget)
+(defun self-rectangle (widget &key (dx 0) (dy 0) (dw 0) (dh 0) (grow 0))
   "Creates a rectangle that matches the widget's shape."
   (sdl2:make-rect
-    (widget-x widget)
-    (widget-y widget)
-    (widget-width widget)
-    (widget-height widget)))
+    (+ (widget-x widget) dx (- grow))
+    (+ (widget-y widget) dy (- grow))
+    (+ (widget-width widget) dw (* 2 grow))
+    (+ (widget-height widget) dh (* 2 grow))))
 
 
 (defmacro each-widget-child (widget child &rest body)
@@ -91,6 +92,16 @@
 (defun key= (sdlkey symkey)
   (sdl2:scancode= (sdl2:scancode-value sdlkey) symkey))
 
+(defmacro keycase (key &body body)
+  `(cond
+     ,@(let ((statements))
+         (dolist (clause body statements)
+           (setf statements 
+                 (append statements
+                         (if (eq (car clause) t)
+                             `((t ,@(cdr clause)))
+                             `(((key= ,key ,(car clause)) ,@(cdr clause) t)))))))))
+
 (defun initialize-struct (thestruct &rest args &key &allow-other-keys)
   (let ((prefix (symbol-name (type-of thestruct))))
     (loop for (key value) on args by #'cddr
@@ -117,8 +128,21 @@
   (width 0)
   (height 0)
   (opaque nil)
+  (opaque-draw-exception t)
+  (mouse-movement-awareness nil)
+  (mouse-click-awareness nil)
   (debug-border-color (make-color))
-  debug-border-rect)
+  debug-border-rect
+  style
+  window)
+
+;; (WIDGET) -> LIST<WIDGET>
+(defgeneric get-widget-children (widget))
+(defmethod get-widget-children (widget)
+  "Returns the widget's children. Overriding it is ONLY necessary
+  if the children are not stored in the CHILDREN slot and
+  the widget wants to rely on the default painting."
+  (widget-children widget))
 
 (defun widget-absolute-right (widget)
   (+ (widget-x widget) (widget-width widget)))
@@ -126,11 +150,20 @@
 (defun widget-absolute-bottom (widget)
   (+ (widget-y widget) (widget-height widget)))
 
-(defgeneric get-widget-children (widget))
-(defmethod get-widget-children (widget)
-  "Returns the widget's children. Overriding it is only necessary
-  if the children is not stored as a list in the CHILDREN slot."
-  (widget-children widget))
+(defun get-widget-at (widget x y)
+  (let ((wx (widget-x widget))(wy (widget-y widget))
+        (ww (widget-absolute-right widget))(wh (widget-absolute-bottom widget)))
+    (if (and (>= x wx) (>= y wy) (< x ww) (< y wh))
+        (progn
+          (format t "GET XY (~A;~A) ENTER (~A) XYWH (~A;~A;~A;~A) RB (~A;~A)~%" x y (type-of widget) wx wy (widget-width widget) (widget-height widget) ww wh)
+          (if (widget-opaque widget)
+              widget
+              (let ((subwidget (some (lambda (child)
+                                       (get-widget-at child x y))
+                                     (get-widget-children widget))))
+                (if subwidget
+                    subwidget
+                    widget)))))))
 
 (defun paint-widget-debug-border (widget renderer)
   "Debug function that paints a border around all widgets."
@@ -153,20 +186,48 @@
     (each-widget-child widget child
                        (paint-widget-debug-border child renderer))))
 
-(defun frame (widget child)
+(defun add-adjust-accordingly (widget child)
   "Adds the child to the widget and resizes widget to match the child."
   (setf (widget-children widget) (list child))
   (setf (widget-width widget) (widget-width child))
   (setf (widget-height widget) (widget-height child)))
 
 ;-------------------------------------------------------------------------
+;; Event vector
+
+(defparameter *EVENTS* (make-hash-table))
+
+(defun attach-event-handler (widget event)
+  (format t "The widget (~A): ~A accepts event: ~A~%" (type-of widget) (widget-id widget) event)
+  (push widget (gethash event *EVENTS*)))
+
+(defun dispatch-event (event payload)
+  (let ((handlers (gethash event *EVENTS*)))
+    (when handlers
+      (dolist (handler handlers)
+        (widget-event-handle handler event payload)))))
+
+(defgeneric widget-event-handle (widget event payload))
+(defmethod widget-event-handle (widget event payload))
+
+;-------------------------------------------------------------------------
 ;; Widget events
+
+(defgeneric widget-event-prepaint (widget renderer tick)
+  (:documentation
+    "Called before painting children."))
+(defmethod widget-event-prepaint (widget renderer tick))
 
 (defgeneric widget-event-paint (widget renderer tick)
   (:documentation
-    "This method is only need to be overriden if the widget need
+    "This method is only necessary to override if the widget needs
     to do unorthodox painting."))
 (defmethod widget-event-paint (widget renderer tick))
+
+(defgeneric widget-event-absolute-xy (widget)
+  (:documentation
+    "This event tells the widget that it has its absolute position set."))
+(defmethod widget-event-absolute-xy (widget))
 
 (defgeneric widget-event-onkey-down (widget key)
   (:documentation
@@ -192,10 +253,90 @@
     This event will pass through opaque widgets."))
 (defmethod widget-event-init (widget))
 
+(defgeneric widget-event-mouse-enter (widget)
+  (:documentation
+    "Issued event when mouse enter the widget."))
+(defmethod widget-event-mouse-enter (widget))
+
+(defgeneric widget-event-mouse-leave (widget)
+  (:documentation
+    "Issued event when mouse leaves the widget."))
+(defmethod widget-event-mouse-leave (widget))
+
+(defgeneric widget-event-mouse-movement (widget x y)
+  (:documentation
+    "Issued event when mouse moves around in the widget."))
+(defmethod widget-event-mouse-movement (widget x y))
+
+;; Mouse clicks
+
+;; Left
+(defgeneric widget-event-mouse-left-click-down (widget x y))
+(defmethod widget-event-mouse-left-click-down (widget x y))
+
+(defgeneric widget-event-mouse-left-click-up (widget x y))
+(defmethod widget-event-mouse-left-click-up (widget x y))
+
+(defgeneric widget-event-mouse-left-click-cancel (widget x y))
+(defmethod widget-event-mouse-left-click-cancel (widget x y))
+
+;; Middle
+(defgeneric widget-event-mouse-middle-click-down (widget x y))
+(defmethod widget-event-mouse-middle-click-down (widget x y))
+
+(defgeneric widget-event-mouse-middle-click-up (widget x y))
+(defmethod widget-event-mouse-middle-click-up (widget x y))
+
+(defgeneric widget-event-mouse-middle-click-cancel (widget x y))
+(defmethod widget-event-mouse-middle-click-cancel (widget x y))
+
+;; Right
+(defgeneric widget-event-mouse-right-click-down (widget x y))
+(defmethod widget-event-mouse-right-click-down (widget x y))
+
+(defgeneric widget-event-mouse-right-click-up (widget x y))
+(defmethod widget-event-mouse-right-click-up (widget x y))
+
+(defgeneric widget-event-mouse-right-click-cancel (widget x y))
+(defmethod widget-event-mouse-right-click-cancel (widget x y))
+
+;; Any
+(defgeneric widget-event-mouse-click-down (widget x y button))
+(defmethod widget-event-mouse-click-down (widget x y button))
+
+(defgeneric widget-event-mouse-click-up (widget x y button))
+(defmethod widget-event-mouse-click-up (widget x y button))
+
+(defgeneric widget-event-mouse-click-cancel (widget x y button))
+(defmethod widget-event-mouse-click-cancel (widget x y button))
+
+;; Raw
+(defgeneric widget-event-mouse-click (widget x y button state))
+(defmethod widget-event-mouse-click (widget x y button state))
+
 ;-------------------------------------------------------------------------
 ; These functions are used to start propagating events.
 
 (defun widget-propagate-onkey-down (widget key)
+  (if (widget-event-onkey-down widget key)
+      (progn
+        (format t "  Handled by widget (~A): ~A.~%" (type-of widget) (widget-id widget))
+        t)
+      (unless (widget-opaque widget)
+        (let ((children (get-widget-children widget)))
+          (some (lambda (child)
+                  (widget-propagate-onkey-down child key))
+                children)))))
+      
+    #|    
+      (if (widget-opaque widget)
+          (progn
+            (format t "  Stopped at opaque widget (~A): ~A.~%" (type-of widget) (widget-id widget))
+            nil)
+          (each-widget-child widget child
+                             (catch 'stopped-opaque
+                               (widget-propagate-onkey-down child key))))))
+
   (when (widget-event-onkey-down widget key)
     (format t "  Handled by widget (~A): ~A.~%" (type-of widget) (widget-id widget))
     (throw 'onkey-event-success t))
@@ -205,7 +346,23 @@
   (each-widget-child widget child
                      (catch 'stopped-opaque
                        (widget-propagate-onkey-down child key))))
+|#
 
+(defun widget-propagate-calculate-xy (widget)
+  (widget-propagate-calculate-xy-children widget (get-widget-children widget))
+  (widget-event-absolute-xy widget)
+  (register-widget widget))
+    
+(defun widget-propagate-calculate-xy-children (widget children)
+  (dolist (child children)
+    (setf (widget-x child)
+          (+ (widget-offset-x child)
+             (widget-x widget)))
+    (setf (widget-y child)
+          (+ (widget-offset-y child)
+             (widget-y widget)))
+    (widget-propagate-calculate-xy child)))        
+                       
 (defun widget-propagate-open (widget)
   (widget-event-open widget)
   (unless (widget-opaque widget)
@@ -226,11 +383,17 @@
   (each-widget-child widget child
                      (widget-propagate-init child)))
 
+;; OPAQUE SHOULD BE OBEYED, BUT ARE THEY DESIGNED TO
 (defun widget-propagate-paint (widget renderer tick)
-  (widget-event-paint widget renderer tick)
-  (each-widget-child widget child
-                     (widget-propagate-paint child renderer tick)))
+  (widget-event-prepaint widget renderer tick)
+  (when (or (not (widget-opaque widget)) (widget-opaque-draw-exception widget))
+    (each-widget-child widget child
+                       (widget-propagate-paint child renderer tick)))
+  (widget-event-paint widget renderer tick))
 
+(defun paint-children (children renderer tick)
+  (dolist (child children)
+    (widget-propagate-paint child renderer tick)))
 ;-------------------------------------------------------------------------
 
 (defparameter *REGISTERED-WIDGETS* nil)
@@ -283,8 +446,8 @@
                     :height (pixmap-height pixmap)
                     :visible visible
                     :id id)))
-      (register-widget widget)
-      (format t "Created IMAGE-WIDGET: ~A.~%" id)
+      (register-widget widget) ;; <<<<<< ?
+      (format t " Created IMAGE-WIDGET: ~A.~%" id)
       widget)))
 
 (defun switch-image-visibility (widget &optional state)
@@ -299,31 +462,205 @@
 
 ;;------------------------------------------------------------------------------
 
+(defstruct emboss-stylesheet
+  (light (make-color :r 213 :g 213 :b 213))
+  (dark (make-color :r 84 :g 84 :b 84))
+  (plate (make-color :r 159 :g 159 :b 159)))
+
+(defstruct (panel-widget (:include widget))
+  "Draws an embossment around its child widget."
+  relief
+  ram
+  top-rect
+  bottom-rect
+  plate-rect)
+
+(defun toggle-panel (widget)
+  "TODO: Use ROTATEF."
+  (let ((style (widget-style widget)))
+    (let ((toggled (make-emboss-stylesheet
+                     :light (emboss-stylesheet-dark style)
+                     :dark (emboss-stylesheet-light style)
+                     :plate (emboss-stylesheet-plate style))))
+      (setf (widget-style widget) toggled))))
+
+(defun make-panel (&key widget id (relief 2) (ram 2) style fixed-width fixed-height)
+  (unless (and (numberp relief) (plusp relief))
+    (error "PANEL-WIDGET(~A): RELIEF must be a positive integer, not ~A.~%" id relief))
+  (setf relief (max 1 (truncate relief)))
+  (unless (and (numberp ram) (plusp ram))
+    (error "PANEL-WIDGET(~A): RAM must be a positive integer, not ~A.~%" id ram))
+  (setf ram (max 1 (truncate ram)))
+  (unless style
+    (setf style (make-emboss-stylesheet)))
+  ;; If either FIXED-WIDTH or FIXED-HEIGHT (or both) is given we wrap the widget in a bag
+  ;; with the specified dimensions. There is no overflow detection!
+  (when (or fixed-width fixed-height)
+    (let (bagwidth bagheight)
+      (when fixed-width
+        (setf bagwidth (- fixed-width relief relief ram ram)))
+      (when fixed-height
+        (setf bagheight (- fixed-height relief relief ram ram)))
+      (setf widget (make-bag 
+                     :align :cross
+                     :fixed-width bagwidth
+                     :fixed-height bagheight 
+                     :widgets (list widget)))))
+  
+  (let ((self (make-panel-widget
+                  :children (list widget)
+                  :id id
+                  :style style)))
+    
+    (setf (widget-width self) (+ (widget-width widget) relief relief ram ram))
+    (setf (widget-height self) (+ (widget-height widget) relief relief ram ram))
+    (setf (widget-offset-x widget) (+ relief ram))
+    (setf (widget-offset-y widget) (+ relief ram))
+    (setf (panel-widget-relief self) relief)
+    (setf (panel-widget-ram self) ram)
+    (format t " Created PANEL-WIDGET: ~A.~%" id)
+    self))
+
+(defmethod widget-event-init ((w panel-widget))
+  (let ((relief (panel-widget-relief w)))
+    (setf (panel-widget-plate-rect w) (self-rectangle w :grow (- relief)))
+    (setf (panel-widget-top-rect w) (self-rectangle w))
+    (setf (panel-widget-bottom-rect w) (self-rectangle w :dx relief :dy relief :dw (- relief) :dh (- relief)))))
+
+(defmethod widget-event-prepaint ((w panel-widget) renderer tick)
+  (let ((style (widget-style w)))
+    (let ((light-color (emboss-stylesheet-light style))
+          (dark-color (emboss-stylesheet-dark style))
+          (plate-color (emboss-stylesheet-plate style)))
+      ;; Light side
+      (set-render-coloring renderer light-color)
+      (sdl2:render-fill-rect renderer (panel-widget-top-rect w))
+      ;; Dark side
+      (set-render-coloring renderer dark-color)
+      (sdl2:render-fill-rect renderer (panel-widget-bottom-rect w))
+      ;; Dark corner pixels
+      (loop for x from (+ (widget-x w) 1) 
+            with y = (- (widget-absolute-bottom w) 1)
+            for p from 1 
+            repeat (1- (panel-widget-relief w)) do
+            (loop for py from 0 below p do
+                  (sdl2:render-draw-point renderer x (- y py))))
+      ;; Dark corner pixels
+      (loop with x = (- (widget-absolute-right w) 1)
+            for y from (+ (widget-y w) 1)
+            for p from 1
+            repeat (1- (panel-widget-relief w)) do
+            (loop for px from 0 below p do
+                  (sdl2:render-draw-point renderer (- x px) y)))
+      ;; Plate
+      (set-render-coloring renderer plate-color)
+      (sdl2:render-fill-rect renderer (panel-widget-plate-rect w)))))
+
+;;------------------------------------------------------------------------------
+;; Button
+
+(defstruct (button-widget (:include widget))
+  "A button."
+  active
+  panel
+  click-callback)
+
+(defun make-button (&key widget id trap (active t) style fixed-width fixed-height)
+  (let ((panel (make-panel 
+                 :widget widget 
+                 :relief 3 
+                 :style style
+                 :fixed-width fixed-width
+                 :fixed-height fixed-height)))
+    (let ((self (make-button-widget
+                  :id id
+                  :panel panel
+                  :active active
+                  :click-callback trap
+                  :children (list panel)
+                  :width (widget-width panel)
+                  :height (widget-height panel)
+                  :mouse-click-awareness t
+                  :opaque t)))
+      (format t " Created BUTTON-WIDGET: ~A.~%" id)
+      self)))
+
+(defun set-button-active (widget status)
+  (setf (button-widget-active widget) status))
+
+(defmethod widget-event-mouse-left-click-down ((w button-widget) x y)
+  (when (button-widget-active w)
+    (toggle-panel (button-widget-panel w))))
+
+(defmethod widget-event-mouse-left-click-up ((w button-widget) x y)
+  (when (button-widget-active w)
+    (toggle-panel (button-widget-panel w))
+    (when (button-widget-click-callback w)
+      (funcall (button-widget-click-callback w) w x y))))
+
+(defmethod widget-event-mouse-left-click-cancel ((w button-widget) x y)
+  (when (button-widget-active w)
+    (toggle-panel (button-widget-panel w))))
+
+(defmethod widget-event-paint ((w button-widget) renderer tick)
+  (unless (button-widget-active w)
+    (set-render-coloring renderer +RED+)
+    (sdl2:render-draw-line renderer 
+                           (widget-x w) 
+                           (widget-y w) 
+                           (1- (widget-absolute-right w)) 
+                           (1- (widget-absolute-bottom w)))
+    (sdl2:render-draw-line renderer
+                           (widget-x w)
+                           (1- (widget-absolute-bottom w))
+                           (1- (widget-absolute-right w))
+                           (widget-y w))))
+
+;;------------------------------------------------------------------------------
+
 (defstruct (canvas-widget (:include widget))
   "The CANVAS-WIDGET is used to paint a background color behind a widget."
   color
   rect)
 
-(defun make-canvas (&key color id widget)
+(defun make-canvas (&key (color +BLACK+) id widget)
   (let ((canvas (make-canvas-widget
                   :color color
                   :id id
                   :width (widget-width widget)
                   :height (widget-height widget)
                   :children (list widget))))
-    (format t "Created CANVAS-WIDGET: ~A.~%" id)
+    (format t " Created CANVAS-WIDGET: ~A.~%" id)
     canvas))
 
 (defmethod widget-event-init ((w canvas-widget))
   (setf (canvas-widget-rect w) (self-rectangle w)))
 
-(defmethod widget-event-paint ((w canvas-widget) renderer tick)
+(defmethod widget-event-prepaint ((w canvas-widget) renderer tick)
   (when (canvas-widget-color w)
     (set-render-coloring renderer (canvas-widget-color w))
-    (sdl2:render-fill-rect renderer (canvas-widget-rect w)))
-  (call-next-method))
+    (sdl2:render-fill-rect renderer (canvas-widget-rect w))))
 
 ;;------------------------------------------------------------------------------
+
+(defstruct (placeholder-widget (:include widget))
+  )
+
+(defun make-placeholder (&key id widget)
+  (let ((self (make-placeholder-widget
+                 :id id
+                 :width (widget-width widget)
+                 :height (widget-height widget)
+                 :children (list widget))))
+    (format t " Created PLACEHOLDER-WIDGET: ~A.~%" id)
+    self))
+
+(defun update-placeholder (placeholder widget &key init)
+  (setf (widget-children placeholder) (list widget))
+  (when init
+    (calculate-absolute-coordinates (widget-window placeholder) placeholder)))
+
+;;-------------------------------------------------------------------------
 
 (defstruct (bag-widget (:include widget))
   "The BAG-WIDGET is a multi purpose layout container. The following layouts
@@ -348,7 +685,22 @@
   todo-flow)
 
 (defun make-bag (&key (align :left) widgets fixed-height fixed-width (spacing 0) id)
+  ;; We remove any NIL in the widget list.
   (setf widgets (remove nil widgets))
+  ;; Make sure fixed dimensions are positive.
+  (when fixed-width
+    (unless (and (numberp fixed-width) (plusp fixed-width))
+      (error "BAG-WIDGET(~A): FIXED-WIDTH must be a positive integer, not ~A.~%" id fixed-width))
+    (setf fixed-width (truncate fixed-width)))
+  (when fixed-height
+    (unless (and (numberp fixed-height) (plusp fixed-height))
+      (error "BAG-WIDGET(~A): FIXED-HEIGHT must be a positive integer, not ~A.~%" id fixed-height))
+    (setf fixed-height (truncate fixed-height)))
+  ;; Also check the spacing.
+  (unless (and (numberp spacing) (>= spacing 0))
+    (error "BAG-WIDGET(~A): SPACING must be a non negative integer, not ~A.~%" id spacing))
+  (setf spacing (truncate spacing))
+  
   (let ((bag (make-bag-widget 
                :children widgets
                :fixed-width fixed-width
@@ -365,7 +717,7 @@
            (:bottom (bag-align-bottom bag))
            (:stack (bag-stack bag))
            (:cross (bag-cross bag)))
-    (format t "Created BAG-WIDGET: ~A.~%" id)
+    (format t " Created BAG-WIDGET: ~A.~%" id)
     bag))
     
 (defun bag-stack (bag)
@@ -484,7 +836,7 @@
 
 (defun make-box (&key padding (top 0) (bottom 0) (left 0) (right 0) widget id)
   (when padding
-   	(etypecase padding
+    (etypecase padding
                (list
                  (ecase (length padding)
                         (2
@@ -511,8 +863,48 @@
     
     (setf (widget-width box) (+ left (widget-width widget) right))
     (setf (widget-height box) (+ top (widget-height widget) bottom))
-    (format t "Created BOX-WIDGET: ~A.~%" id)
+    (format t " Created BOX-WIDGET: ~A.~%" id)
     box))
+
+;;------------------------------------------------------------------------------
+
+(defstruct (debug-looking-glass-widget (:include widget))
+  (outline-color +WHITE+)
+  selected
+  outline)
+
+(defun make-debug-looking-glass (width height &key id)
+  (let ((self (make-debug-looking-glass-widget
+                :id id
+                :width width
+                :height height
+                :mouse-click-awareness t
+                :mouse-movement-awareness t
+                :opaque nil)))
+    (format t " Created DEBUG-LOOKING-GLASS-WIDGET: ~A.~%" id)
+    self))
+
+(defmethod widget-event-mouse-movement ((w debug-looking-glass-widget) x y)
+  (let ((widget (get-widget-xy-below (funcall (widget-window w)) x y)))
+    (unless (eq widget (debug-looking-glass-widget-selected w))
+      (setf (debug-looking-glass-widget-selected w) widget)
+      (when widget
+        (format t "LOOK: ~A = ~A~%" (type-of widget) (widget-id widget))))))
+
+(defmethod widget-event-mouse-leave ((w debug-looking-glass-widget))
+  (setf (debug-looking-glass-widget-selected w) nil)
+  (setf (debug-looking-glass-widget-outline w) nil))
+
+(defmethod widget-event-mouse-left-click-up ((w debug-looking-glass-widget) x y)
+  (let ((widget (debug-looking-glass-widget-selected w)))
+    (when widget
+      (setf (debug-looking-glass-widget-outline w) (self-rectangle widget)))))
+
+(defmethod widget-event-paint ((w debug-looking-glass-widget) renderer tick)
+  (let ((outline (debug-looking-glass-widget-outline w)))
+    (when outline
+      (set-render-coloring renderer (debug-looking-glass-widget-outline-color w))
+      (sdl2:render-fill-rect renderer outline))))
 
 ;;------------------------------------------------------------------------------
 ;;------------------------------------------------------------------------------
@@ -521,637 +913,103 @@
 (defstruct (menu-widget (:include widget))
   "The menu consist of two components.
    POINTER       ENTRIES
-  ----------------------------------
+  ---------------------------------- - - - - - - - -
   |            |                   |
-  | ---------- | ----------------- |
-  | |POINTER | | |ENTRY 1        | |
-  | ---------- | ----------------- |
+  | ---------- | ----------------- | - - - - - - - - 
+  | |POINTER | | |ENTRY 1        | | MIRROR PONTER
+  | ---------- | ----------------- | - - - - - - - -
   |            | ----------------- |
   |            | |ENTRY 2        | |
-  |------------|--------------------
+  |------------|-------------------- - - - - - - - - 
   The pointer will always line up with THE-ENTRY
   on each option in the menu. This way each option
-  can have external layout. TODO: THE-POINTER."
+  can have external layout."
   pointer  ; the pointer image
-  targets  ; the targets within each entry child which to align the pointer to
-  size     ; number of targets
-  index    ; current target index
-  actions) ; callbacks
+  options  ; the targets within each entry child which to align the pointer to 
+  selected    ; current target index
+  size)
 
-(defstruct (menu-entry-widget (:include widget))
+
+(defstruct (menu-option-widget (:include widget))
   action)
 
-(defun make-menu-entry (&key id widget action)
-  (make-menu-entry-widget
-    :id id
-    :opaque t
+(defun make-menu-option (&key action widget local-id)
+  (make-menu-option-widget
     :children (list widget)
     :action action
+    :local-id local-id
     :width (widget-width widget)
     :height (widget-height widget)))
 
-(defstruct (menu-target-widget (:include widget))
-  target-id)
-
-(defun the-target (target-id widget)
-  (make-menu-target-widget
-    :children (list widget)
-    :width (widget-width widget)
-    :height (widget-height widget)
-    :target-id target-id))
-
-(defun make-menu (&key id pointer entries (start 0))
-  (let ((widgets (mapcar 
-                   (lambda (entry)
-                     (car (widget-children entry)))
-                   entries)))
+(defun make-menu (&key id pointer widgets (start 0))
+  (let ((options (remove nil
+                         (mapcar
+                           (lambda (widget)
+                             (search-widget-by-type widget 'menu-option-widget))
+                           widgets))))
     (let ((bag (make-bag
                  :align :left
                  :widgets widgets)))
       (setf (widget-offset-x bag) (widget-width pointer))
-      (let ((callbacks (mapcar
-                         (lambda (entry)
-                           (menu-entry-widget-action entry))
-                       entries)))
-        (let ((targets (mapcar
-                         (lambda (widget)
-                           (let ((target (search-widget-by-type widget 'menu-target-widget)))
-                             (if target
-                                 target
-                                 (error "Unable to find (the-entry) in ~A." widget))))
-                         widgets)))
-          (let ((menu (make-menu-widget
-                        :id id
-                        :width (+ (widget-width pointer) (widget-width bag))
-                        :height (widget-height bag)
-                        :pointer pointer
-                        :children (list pointer bag)
-                        :targets targets
-                        :index start
-                        :size (length widgets)
-                        :actions callbacks)))
-            (format t "Created MENU-WIDGET: ~A.~%" id)
-            menu))))))
+      (let ((size (length options)))
+        (unless (> size 0)
+          (error "MENU-WIDGET needs at least one MENU-OPTION-WIDGET."))
+        (let ((menu (make-menu-widget
+                      :id id
+                      :width (+ (widget-width pointer) (widget-width bag))
+                      :height (widget-height bag)
+                      :pointer pointer
+                      :children (list pointer bag)
+                      :options (make-array size :initial-contents options)
+                      :size size
+                      :selected start)))
+          (format t " Created MENU-WIDGET: ~A. ~%" id)
+          menu)))))
 
-(defmethod widget-event-onkey-down ((widget menu-widget) key)
-  (cond
-    ((sdl2:scancode= (sdl2:scancode-value key) :scancode-down)
-     (let ((index (menu-widget-index widget)))
-       (setf (menu-widget-index widget)
-             (mod (1+ index) (menu-widget-size widget))))
-     (update-menu-pointer widget)
-     t)
-    ((sdl2:scancode= (sdl2:scancode-value key) :scancode-up)
-     (let ((index (menu-widget-index widget)))
-       (setf (menu-widget-index widget)
-             (mod (1- index) (menu-widget-size widget)))
-       (update-menu-pointer widget))
-     t)
-    ((sdl2:scancode= (sdl2:scancode-value key) :scancode-return)
-     (let ((callback (nth (menu-widget-index widget)
-                          (menu-widget-actions widget))))
-       (when callback
-         (let ((target-id (menu-target-widget-target-id (nth (menu-widget-index widget)
-                                                             (menu-widget-targets widget)))))
-           (funcall callback widget target-id)))
-       t))
-    (t
-      (let ((target (nth (menu-widget-index widget) (menu-widget-targets widget))))
-        (widget-propagate-onkey-down target key)))))
-
-(defun update-menu-pointer (widget)
-  (let ((index (menu-widget-index widget)))
-    (let ((targets (menu-widget-targets widget)))
-      (let ((target (nth index targets)))
-        (let ((pointer (menu-widget-pointer widget)))
-          (setf (widget-y pointer) (widget-y target)))))))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (flipper-widget (:include widget))
-  alphabet
-  pixmap
-  (index 0)
-  total)
-
-(defun make-flipper (alphabet &key (initial 0) id)
-  (let ((widget (initialize-flipper (make-flipper-widget)
-                                     alphabet
-                                     initial
-                                     id)))
-    (format t "Created FLIPPER-WIDGET: ~A.~%" id)
-    widget))
-  
-(defun initialize-flipper (widget alphabet initial id)
-  (let ((alphabet-descriptor (get-charmap alphabet :on-failure-nil t)))
-    (unless alphabet-descriptor
-      (error "(initialize-flipper) FLIPPER-WIDGET (~A) Invalid charmap id: ~A."
-             id alphabet))
-    (unless (or (numberp initial) (plusp initial))
-      (error "(initialize-flipper) FLIPPER-WIDGET (~A) Invalid INITIAL index: ~A."
-             id initial))
-    (let ((widget (initialize-struct widget
-                    :alphabet alphabet-descriptor
-                    :index initial
-                    :id id
-                    :opaque t
-                    :total (charmap-descriptor-total alphabet-descriptor)
-                    :width (charmap-descriptor-width alphabet-descriptor)
-                    :height (charmap-descriptor-height alphabet-descriptor))))
-      (set-flipper-index widget initial)
-      widget)))
-
-(defun set-flipper-index (widget index)
-  (setf index 
-        (mod index 
-             (flipper-widget-total widget)))
-  (setf (flipper-widget-index widget) index)
-  (update-flipper-letter widget))
-
-(defun set-flipper-Δindex (widget offset)
-  (let ((index (flipper-widget-index widget)))
-    (incf index offset)
-    (set-flipper-index widget index)))
-
-(defun update-flipper-letter (widget)
-  (setf (flipper-widget-pixmap widget)
-        (get-charmap-pixmap
-          (flipper-widget-alphabet widget)
-          (flipper-widget-index widget))))
-
-(defmethod widget-event-paint ((w flipper-widget) renderer tick)
-  (paint-descriptor (flipper-widget-pixmap w) renderer (widget-x w) (widget-y w) tick))
-
-(defmethod widget-event-onkey-down ((widget flipper-widget) key)
-  (cond
-    ((key= key :scancode-down)
-     (set-flipper-Δindex widget -1)
-     t)
-    ((key= key :scancode-up)
-     (set-flipper-Δindex widget 1)
-     t)))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (tag-widget (:include widget))
-  flippers
-  total
-  selected
-  chevron)
-
-(defun make-tag (alphabet &key id initial chevron (letters 3))
-  (let ((widget (initialize-tag alphabet id initial chevron letters)))
-    (format t "Created TAG-WIDGET: ~A.~%" id)
-    widget))
-
-(defun initialize-tag (alphabet id initial chevron letters)
-  (unless letters
-    (setf letters (length initial)))
-  (unless (or letters (typep letters 'number) (> letters 0))
-    (error "(make-tag) TAG-WIDGET (~A) Invalid number of letters: ~A~%" id letters))
-  (let ((flippers
-          (loop for i below letters collect
-                (make-box
-                  :widget (make-bag
-                            :align :cross
-                            :widgets (list
-                                       (when chevron
-                                           (let ((image (make-image chevron :visible nil)))
-                                             (setf (widget-local-id image) :local-chevron)
-                                             image)) 
-                                       (make-flipper alphabet
-                                                     :initial (nth i initial))))))))
-    (let ((bag (make-bag
-                 :align :middle
-                 :spacing 0
-                 :widgets flippers)))
-      
-      (let ((tag (make-tag-widget
-                   :id id
-                   :width (widget-width bag)
-                   :height (widget-height bag)
-                   :selected 0
-                   :flippers (make-array (list letters) :initial-contents flippers)
-                   :total letters
-                   :opaque t
-                   :children (list bag))))
-        (show-tag-chevron tag t)
-        tag))))
-
-(defun show-tag-chevron (tag visible)
+(defun change-menu-selection (menu offset)
   (with-slots ((selected% selected)
-               (flippers% flippers)) tag
-              (let ((chevron (search-widget-by-local-id
-                               (aref flippers% selected%)
-                               :local-chevron)))
-                (when chevron
-                  (switch-image-visibility chevron visible)))))
+               (size% size)) 
+              menu
+              (setf selected%
+                    (mod (+ selected% offset) size%))))
 
-(defun flip-the-tag (widget offset)
-  (show-tag-chevron widget nil)
-  (let ((selected (tag-widget-selected widget)))
-    (incf selected offset)
-    (setf selected (mod selected (tag-widget-total widget)))
-    (setf (tag-widget-selected widget) selected)
-    (show-tag-chevron widget t)))
+(defun reposition-menu-pointer (menu)
+  (with-slots ((pointer% pointer)
+               (selected% selected)
+               (options% options))
+              menu
+              (setf (widget-y pointer%) (widget-y (aref options% selected%)))))
 
-(defun set-tag-name (widget &optional name)
-  (unless name
-    (setf name (loop repeat (tag-widget-total widget) collect 0)))
-  (let ((flippers (tag-widget-flippers widget)))
-    (let ((size (min (length name) (length flippers))))
-      (dotimes (index size)
-        (set-flipper-index (search-widget-by-type (aref flippers index) 'flipper-widget)
-                           (nth index name))))))
+(defun activate-current-menu-option (menu)
+  (with-slots ((selected% selected)
+               (options% options))
+              menu
+              (let ((option (aref options% selected%)))
+                (let ((action (menu-option-widget-action option)))
+                  (when action
+                    (funcall action menu (widget-local-id option)))))))  
 
-(defun get-tag-name (widget)
-  (loop for flipper across (tag-widget-flippers widget)
-        collect (flipper-widget-index (search-widget-by-type flipper 'flipper-widget))))
-
-(defmethod widget-event-onkey-down ((w tag-widget) key)
-  (cond
-    ((key= key :scancode-left)
-     (flip-the-tag w -1)
-     t)
-    ((key= key :scancode-right)
-     (flip-the-tag w 1)
-     t)
-    (t
-      (widget-propagate-onkey-down
-        (aref (tag-widget-flippers w) 
-              (tag-widget-selected w))
-        key))))
+(defmethod widget-event-onkey-down ((menu menu-widget) key)
+  (keycase key
+    (:scancode-down
+      (change-menu-selection menu 1)
+      (reposition-menu-pointer menu)
+      t)
+    (:scancode-up
+      (change-menu-selection menu -1)
+      (reposition-menu-pointer menu)
+      t)
+    (:scancode-return
+      (activate-current-menu-option menu)
+      t)))
 
 ;;------------------------------------------------------------------------------
+;;------------------------------------------------------------------------------
+;;------------------------------------------------------------------------------
 
-(defstruct (scoreboard-widget (:include widget))
-  points
-  digits
-  composition
-  pix-width
-  pixmaps)
 
-(defun make-scoreboard (&key id (digits 5) pixmaps (initial 0))
-  (let ((widget (initialize-scoreboard (make-scoreboard-widget) 
-                                       id 
-                                       digits 
-                                       pixmaps 
-                                       initial)))
-    (format t "Created SCOREBOARD-WIDGET: ~A.~%" id)
-    widget))
-
-(defun initialize-scoreboard (widget id digits pixmaps initial)
-  (unless (or (numberp digits) (> digits 0))
-    (error "SCOREBOARD-WIDGET (~A) Number of digits must be positive: ~A~%" id digits))
-  (unless (or pixmaps (listp pixmaps))
-    (error "SCOREBOARD-WIDGET (~A) PIXMAPS is either NIL or not a list: ~A~%" id pixmaps))
   
-  (let ((pixmaps-array (get-pixmaps-array pixmaps)))
-    (let ((height (pixmap-height (aref pixmaps-array 0)))
-          (width (pixmap-width (aref pixmaps-array 0))))
-      (let ((board (initialize-struct widget
-                     :id id
-                     :pix-width width
-                     :digits digits
-                     :pixmaps pixmaps-array
-                     :width (* width digits)
-                     :height height
-                     :points initial
-                     :composition (make-array (list digits)))))
-        (compute-composition board)
-        board))))
 
-(defgeneric reset-scoreboard (widget))
-(defmethod reset-scoreboard ((widget scoreboard-widget))
-  (set-score widget 0))
 
-(defmethod widget-event-paint ((w scoreboard-widget) renderer tick)
-  (let ((pixw (scoreboard-widget-pix-width w)))
-    (loop for pixmap across (scoreboard-widget-composition w) for index from 0 do
-          (paint-descriptor pixmap 
-                            renderer 
-                            (+ (widget-x w) (* pixw index)) 
-                            (widget-y w)
-                            tick))))
 
-; (WIDGET, INT) -> NIL
-(defgeneric set-score (widget points))
-(defmethod set-score ((widget scoreboard-widget) points)
-  (setf (scoreboard-widget-points widget) (abs points))
-  (compute-composition widget))
-
-(defgeneric get-score (widget))
-(defmethod get-score ((widget scoreboard-widget))
-  (scoreboard-widget-points widget))
-
-; (INT, INT) -> STRING
-(defun points-to-text (points digits)
-  (let ((text (write-to-string points)))
-    (let ((diff (- digits (length text))))
-      (cond
-        ((< diff 0) ;(subseq text (abs diff)))
-         (make-string digits :initial-element #\9))
-        ((> diff 0) (concatenate 'string
-                                 (make-string diff :initial-element #\0)
-                                 text))
-        (t text)))))
-
-; STRING -> LIST
-(defun text-to-digits (text)
-  (mapcar
-    (lambda (c)
-      (- (char-code c) (char-code #\0)))
-    (coerce
-      text
-      'list)))
-
-; SCOREBOARD-WIDGET -> NIL
-(defun compute-composition (board)
-  (let ((points (scoreboard-widget-points board)))
-    (let ((text (points-to-text points (scoreboard-widget-digits board))))
-      (let ((digits (text-to-digits text)))
-        (loop for digit in digits for index from 0  do
-              (setf (aref (scoreboard-widget-composition board) index)
-                    (aref (scoreboard-widget-pixmaps board) digit)))))))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (highscoreboard-widget (:include scoreboard-widget))
-  red-pixmaps
-  green-pixmaps
-  in-the-green)
-
-(defun make-highscoreboard (&key id (digits 5) red green (initial 0))
-  (unless (> digits 0)
-    (error "HIGHSCOREBOARD-WIDGET (~A) Number of digits must be positive: ~A~%" id digits))
-  (unless (or red (listp red))
-    (error "HIGHSCOREBOARD-WIDGET (~A) RED is either NIL or not a list: ~A~%" id red))
-  (unless (or green (listp green))
-    (error "HIGHSCOREBOARD-WIDGET (~A) GREEN is either NIL or not a list: ~A~%" id green))
-  (let ((board (initialize-highscoreboard 
-                 (make-highscoreboard-widget) id digits red green initial)))
-    (format t "Created HIGHSCOREBOARD-WIDGET: ~A.~%" id)
-    board))
-
-(defun initialize-highscoreboard (widget id digits red green initial)
-  (initialize-scoreboard widget id digits red initial)
-  (let ((green-pixmaps (get-pixmaps-array green)))
-    (let ((board (initialize-struct widget     
-                                    :green-pixmaps green-pixmaps
-                                    :red-pixmaps (scoreboard-widget-pixmaps widget))))
-      board)))
-
-(defmethod reset-scoreboard ((widget highscoreboard-widget))
-  (setf (scoreboard-widget-pixmaps widget) (highscoreboard-widget-red-pixmaps widget))
-  (setf (highscoreboard-widget-in-the-green widget) nil)
-  (call-next-method))
-
-(defmethod set-score ((widget highscoreboard-widget) points)
-  (unless (highscoreboard-widget-in-the-green widget)
-    (when (highscore:worthy? points)
-      (setf (highscoreboard-widget-in-the-green widget) t)
-      (setf (scoreboard-widget-pixmaps widget) 
-            (highscoreboard-widget-green-pixmaps widget))))
-  (call-next-method))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (scoreentry-widget (:include widget))
-  tag-link
-  scoreboard-link)
-
-(defun make-scoreentry (letter-charmap number-ids &key chevron editable (letters 3) (digits 5) emblem (initial-points 0) (initial-name '(0 0 0)) id)
-  (let ((bag (make-bag
-               :align :center
-               :widgets (list 
-                          (make-tag letter-charmap 
-                                    :initial initial-name 
-                                    :letters letters
-                                    :chevron chevron)
-                          (make-scoreboard :pixmaps number-ids 
-                                           :digits digits 
-                                           :initial initial-points)))))
-    (when emblem
-      (setf bag (make-bag
-                  :align :middle
-                  :widgets (list
-                             (make-box
-                               :right 10
-                               :widget (etypecase emblem
-                                                  (keyword
-                                                    (make-image emblem))
-                                                  (widget
-                                                    emblem)
-                                                  (t
-                                                    (error "(make-scoreentry) SCOREENTRY-WIDGET (~A): Unknown emblem type ~A." id (type-of emblem)))))
-                             bag))))
-      (make-scoreentry-widget
-        :children (list bag)
-        :id id
-        :opaque (not editable)
-        :width (widget-width bag)
-        :height (widget-height bag)
-        :tag-link (search-widget-by-type bag 'tag-widget)
-        :scoreboard-link (search-widget-by-type bag 'scoreboard-widget))))
-
-(defun set-entry-score (widget points)
-  (set-score (scoreentry-widget-scoreboard-link widget) points))
-
-(defun set-entry-name (widget name)
-  (set-tag-name (scoreentry-widget-tag-link widget) name))
-
-(defun get-entry-name (widget)
-  (get-tag-name (scoreentry-widget-tag-link widget)))
-
-(defun get-entry-score (widget)
-  (get-score (scoreentry-widget-scoreboard-link widget)))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (flipbook-widget (:include widget))
-  index
-  total)
-
-; (&KEY) -> FLIPBOOK-WIDGET
-(defun make-flipbook (&key id images (initial 0))
-  (let ((widget (initialize-flipbook (make-flipbook-widget) id images initial)))
-    (format t "Created FLIPBOOK-WIDGET: ~A.~%" id)
-    widget))
-
-; (...) -> FLIPBOOK-WIDGET
-(defun initialize-flipbook (widget id images initial)
-  (unless (numberp initial)
-    (error "(make-flipbook) FLIPBOOK-WIDGET (~A): Initial value is not a NUMBER: ~A."
-           id initial))
-  (unless (verify-pixmap-id-list images)
-    (error "(make-flipbook) FLIPBOOK-WIDGET (~A): IMAGES contains invalid pixmap id: ~A."
-           id images))
-  (setf images (loop for x in images collect (make-image x :visible nil)))
-  (initialize-struct widget
-                     :id id
-                     :children images
-                     :total (length images)
-                     :index initial
-                     :width (widget-width (nth 0 images))
-                     :height (widget-height (nth 0 images)))
-  (flip-the-book-page widget initial)
-  widget)
-
-(defun flipbook-page-visible (widget state)
-  (setf (image-widget-visible 
-          (nth (flipbook-widget-index widget) (widget-children widget))) 
-        state))
-
-; () -> NIL
-(defun flip-the-book-page (widget index)
-  (when (minusp index)
-    (format t "(flip-the-book) FLIPBOOK-WIDGET (~A): Warning, negative index: ~A.~%"
-            (widget-id widget) index))
-  
-  (let ((total (flipbook-widget-total widget)))
-    (if total
-        (let ((index (mod index total)))
-          (flipbook-page-visible widget nil)
-          (setf (flipbook-widget-index widget) index)
-          (flipbook-page-visible widget t))
-        (format t "(flip-the-book) FLIPBOOK-WIDGET (~A): Trying to flip empty book to: ~A.~%"
-                (widget-id widget) index))))
-  
-;;------------------------------------------------------------------------------
-
-(defstruct (particle-field-widget (:include widget))
-  (check-top t)
-  (check-left t)
-  (check-bottom t)
-  (check-right t)
-  particles)
-
-(defun make-particle-field (&key (width *WINDOW-WIDTH*) 
-                                 (height *WINDOW-HEIGHT*) 
-                                 id
-                                 (check-right t)
-                                 (check-bottom t)
-                                 (check-left t)
-                                 (check-top t))
-  (let ((widget (make-particle-field-widget
-                  :height height
-                  :width width
-                  :id id
-                  :check-right check-right
-                  :check-bottom check-bottom
-                  :check-left check-left
-                  :check-top check-top)))
-    (format t "Created PARTICLE-FIELD-WIDGET: ~A.~%" id)
-    widget))
-
-(defstruct (particle-sprite (:include sprite-descriptor))
-  (death (lambda (particle field)
-           (with-slots ((check-right% check-right)
-                        (check-bottom% check-bottom)
-                        (check-left% check-left)
-                        (check-top% check-top)) field
-                       (cond
-                         ((and check-right% 
-                               (> (sprite-x particle) (widget-absolute-right field)))
-                          t)
-                         ((and check-bottom% 
-                               (> (sprite-y particle) (widget-absolute-bottom field)))
-                          t)
-                         ((and check-left% 
-                               (< (sprite-absolute-right particle) (widget-x field)))
-                          t)
-                         ((and check-top%
-                               (< (sprite-absolute-bottom particle) (widget-y field)))
-                          t))))))
-
-(defun particle-field-add (field particle)
-  (push particle (particle-field-widget-particles field)))
-
-(defun remove-all-particles (widget)
-  (setf (particle-field-widget-particles widget) nil))
-
-(defun strip-dead-particles (widget)
-  (let ((particles))
-    (dolist (particle (particle-field-widget-particles widget))
-      (let ((death (particle-sprite-death particle)))
-        (if death
-            (unless (funcall death particle widget)
-              (push particle particles))
-            (push particle particles))))
-    (setf (particle-field-widget-particles widget) (reverse particles))))
-
-(defmethod widget-event-paint ((w particle-field-widget) renderer tick)
-  (dolist (particle (particle-field-widget-particles w))
-    (paint-sprite particle renderer tick))
-  (strip-dead-particles w))
-
-;;------------------------------------------------------------------------------
-
-;; (0 0 0 0 1 2 4 6 9 11 12 12 11 9 6 4 2 1 0)
-
-(defparameter *T3*
-  '(3 4 5 6 7 8 4 5 6 7 8 9 5 6 7 8 9 10 6 7 8 9 10 11 7 8 9 10 11 12 8 9 10 11 12 13 4 5 6 7 8 9 5 6 7
-      8 9 10 6 7 8 9 10 11 7 8 9 10 11 12 8 9 10 11 12 13 9 10 11 12 13 14 5 6 7 8 9 10 6 7 8 9 10 11 7 8
-      9 10 11 12 8 9 10 11 12 13 9 10 11 12 13 14 10 11 12 13 14 15 6 7 8 9 10 11 7 8 9 10 11 12 8 9 10
-      12 13 9 10 11 12 13 14 10 11 12 13 14 15 11 12 13 14 15 16 7 8 9 10 11 12 8 9 10 11 12 13 9 10
-      11 12 13 14 10 11 12 13 14 15 11 12 13 14 15 16 12 13 14 15 16 17 8 9 10 11 12 13 9 10 11 12 13 14
-      11 12 13 14 15 11 12 13 14 15 16 12 13 14 15 16 17 13 14 15 16 17 18))
-
-(defstruct (star-rain-widget (:include widget))
-  (dice (alexandria:shuffle (copy-list *T3*)))
-  field
-  startx
-  starty
-  pixmaps
-  (tick 0))
-
-(defun make-star-rain (pixmaps &key 
-                               id 
-                               (width *WINDOW-WIDTH*) 
-                               (height *WINDOW-HEIGHT*)
-                               (startx 0)
-                               (starty 0))
-  (let* ((field (make-particle-field :width width :height height :check-top nil))
-         (widget (make-star-rain-widget
-                  :id id
-                  :width width
-                  :height height
-                  :children (list field)
-                  :field field
-                  :startx startx
-                  :starty starty
-                  :pixmaps (get-pixmaps-array pixmaps))))
-    (format t "Created STAR-RAIN-WIDGET: ~A.~%" id)
-    widget))
-
-(defmethod widget-event-open ((w star-rain-widget))
-  (remove-all-particles (star-rain-widget-field w)))
-
-(defmethod widget-event-paint :after ((w star-rain-widget) renderer tick)
-  (when (> (- tick (star-rain-widget-tick w)) 20)
-    (setf (star-rain-widget-tick w) tick)
-    (with-slots ((dice% dice)) w
-                (let ((n (car dice%)))
-                  (setf dice% (cdr dice%))
-                  (when (>= n 14)
-                    (incf (star-rain-widget-tick w) 250)
-                    (add-star w))
-                  (setf dice% (alexandria:shuffle (copy-list *T3*)))))))
-
-(defstruct (star-particle (:include particle-sprite))
-  (rotation (nth (random 2) '(-1 1))))
-
-(defun add-star (widget)
-  (particle-field-add (star-rain-widget-field widget)
-                      (make-star-particle
-                        :pixmap (aref (star-rain-widget-pixmaps widget) 
-                                      (random (length (star-rain-widget-pixmaps widget))))
-                        :velocity (list 0 70)
-                        :acceleration (list 0 0)
-                        :pos (list (star-rain-widget-startx widget) 
-                                   (star-rain-widget-starty widget))
-                        :transform-x (lambda (sprite tick)
-                                       (+ (sprite-descriptor-x sprite)
-                                          (floor (* (* 50 (star-particle-rotation sprite))
-                                                    (sin (/ tick 1000.0)))))))))
 
