@@ -8,7 +8,7 @@
   active
   id
   internal-id
-  internal-stack-pos ;; MAKE STACK ARRAY ADJUSTABLE AND PUSH AND SET INDEX
+  stack-index
   visible
   group
   callback-open
@@ -24,6 +24,9 @@
 
 (defparameter *WINDOW-PAINT-STACK* nil
   "Windows sorted in paint order.")
+
+(defparameter *WINDOW-STACK* nil
+  "All windows sorted in paint order.")
 
 (defparameter *NAMED-WINDOWS* nil
   "Maps identifiers to windows.")
@@ -41,10 +44,11 @@
   "When set will cause borders to be painted around widgets.")
 
 ; (INT, INT) -> NIL
-(defun initialize-windows (width height)
+(defun glas-initialize-window-defaults (width height)
   (setf *WINDOWS* (make-hash-table :test #'eq))
   (setf *WINDOW-PAINT-STACK* nil)
-  (setf *WINDOW-INPUT-STACK* nil)
+  (setf *WINDOW-STACK* (make-array '(20) :adjustable t :fill-pointer 0))
+  (setf *WINDOW-INPUT-STACK* (make-array '(0)))
   (setf *NAMED-WINDOWS* (make-hash-table :test #'eq))
   (setf *WINDOW-GROUPS* (make-hash-table :test #'eq))
   (setf *DEBUG-WIDGET-BORDER* nil)
@@ -53,6 +57,47 @@
   (setf *MOUSE-MOVEMENT-TRACKER* nil)
   (setf *MOUSE-CLICK-VECTOR* (make-array (list 5) :initial-element nil))
   nil)
+
+;; EVENT  4 = WINDOW MOVED
+;; EVENT 10 = MOUSE ENTER WINDOW
+;; EVENT 11 = MOUSE LEAVE WINDOW
+;; EVENT 12 = GAIN FOCUS
+;; EVENT 13 = LOST FOCUS
+;; EVENT 14 = WINDOW CLOSE
+;; EVENT 15 = OFFERED FOCUS
+
+(defun translate-window-event (event)
+  (case event
+        (4 "WINDOW MOVED")
+        (10 "MOUSE ENTER")
+        (11 "MOUSE LEAVE")
+        (12 "GAIN FOCUS")
+        (13 "LOST FOCUS")
+        (14 "WINDOW CLOSE")
+        (15 "OFFERED FOCUS")
+        (otherwise event)))
+
+(defun debug-print-active-windows ()
+  (format t "█████████ Active windows (input order is bottom up)~%")
+  (map nil (lambda (window)
+             (when (window-active window)
+               (format t "█    ~A~%" (window-id window))))
+       *WINDOW-STACK*)
+  (format t "█████████~%"))
+
+(defun debug-print-visible-windows ()
+  (format t "█████████ Visible windows~%")
+  (map nil (lambda (window)
+             (when (window-visible window)
+               (format t "█    ~A~%" (window-id window))))
+       *WINDOW-STACK*)
+  (format t "█████████~%"))
+
+(defun debug-print-window-stack ()
+  (format t "█████████ Window stack~%")
+  (loop for x from 0 below (fill-pointer *WINDOW-STACK*) do
+        (format t "█   ~A: ~A~%" x (window-id (aref *WINDOW-STACK* x))))
+  (format t "█████████~%"))
 
 ; (INT, INT) -> INT
 (defun calc-offset-within (container child)
@@ -80,14 +125,23 @@
   (setf (window-active window) nil)
   nil)
 
+(defun flipivate (window)
+  (setf (window-active window) (not (window-active window))))
+
 ; WINDOW -> NIL
-(defun push-window (window)
-  "Pushes a window onto the stacks and register its id for lookup."
-  (push window *WINDOW-INPUT-STACK*)
-  (setf *WINDOW-PAINT-STACK* (append *WINDOW-PAINT-STACK* (list window)))
+(defun attach-window (window)
+  (let ((index (vector-push-extend window *WINDOW-STACK*)))
+    (setf (window-stack-index window) index)
+    ;(setf *WINDOW-INPUT-STACK* (coerce (reverse *WINDOW-STACK*) 'list))
+    ;(setf *WINDOW-INPUT-STACK* (reverse *WINDOW-STACK*))
+    ;(setf (window-internal-input-layer window) (length *WINDOW-INPUT-STACK*))
+    nil))
+
+(defun register-window (window)
   (when (window-id window)
-    (setf (gethash (window-id window) *named-windows*) window))
-  nil)
+    (format t "Registering window: ~A.~%" (window-id window))
+    (setf (gethash (window-id window) *NAMED-WINDOWS*) window)
+    nil))
 
 ; (WINDOW-ID &KEY) -> WINDOW | NIL
 (defun find-window (id &key on-failure-nil) 
@@ -159,50 +213,55 @@
     (dolist (window windows nil)
       (close-window window))))
 
+;;------------------------------------------------------------------------------
+;; PAINTING
+
+(defun paint-window (window renderer tick &key debug-borders)
+  (let ((widget (window-widget window)))
+    (when widget
+      (widget-propagate-paint widget renderer tick debug-borders))))
+
 ; (SDL2:RENDERER, INT) -> NIL
-(defun paint-windows (renderer tick)
-  "Iterates through the paint stack and paints each window."
-  (dolist (window *WINDOW-PAINT-STACK* nil)
-    (when (window-visible window)
+(defun paint-all-windows (renderer tick &key debug-borders)
+  (loop for i from 0 below (fill-pointer *WINDOW-STACK*) do
+        (let ((window (aref *WINDOW-STACK* i)))
+          (when (window-visible window)
+            (paint-window window renderer tick :debug-borders debug-borders)))))
+
+;;------------------------------------------------------------------------------
+
+(defun initialize-windows ()
+  (map nil (lambda (window)
+             (format t "Initializing window: ~A.~%" (window-id window))
+             (let ((widget (window-widget window)))
+               (when widget
+                 (widget-propagate-init widget window))))
+       *WINDOW-STACK*))
+
+;;------------------------------------------------------------------------------
+;; Searching for a widget using the input stack order (reverse paint order).
+
+(defun search-stack-xy (x y)
+  "Searches for the widget at X and Y beginning at the top of the stack."
+  (search-stack-xy-from (1- (fill-pointer *WINDOW-STACK*)) x y))
+
+(defun search-stack-xy-from (index x y)
+  "Searches for the widget at X and Y beginning at stack index INDEX."
+  (format t "-----------search-stack-xy-from: ~A~%" index)
+  (loop for i from index downto 0
+        do (let ((result (search-window-xy (aref *WINDOW-STACK* i) x y)))
+             (when result
+               (return-from search-stack-xy-from result)))))
+
+(defun search-window-xy (window x y)
+  "Searches the WINDOW for the widget at X and Y."
+  (when (window-visible window)
+    (when t;(window-active window)
       (let ((widget (window-widget window)))
         (when widget
-          (widget-propagate-paint widget renderer tick))))))
+          (search-widget-xy widget x y))))))
 
-; SDL2:RENDERER -> NIL
-(defun paint-debug-borders (renderer) 
-  "Paints the widgets' borders for debugging."
-  (dolist (window *WINDOW-PAINT-STACK* nil)
-    (when (window-visible window)
-      (let ((widget (window-widget window)))
-        (paint-widget-debug-border widget renderer)))))
-
-; () -> NIL
-(defun initialize-window-widgets ()
-  (dolist (window *WINDOW-INPUT-STACK* nil)
-    (format t "Initializing window: ~A.~%" (window-id window))
-    (let ((widget (window-widget window)))
-      (when widget
-        (setf (widget-window widget) (window-internal-id window))
-        (widget-propagate-init widget)))))
-
-(defun get-window-widget-xy (window x y)
-  (when (window-visible window)
-    (when (window-active window)
-      (get-widget-at (window-widget window) x y))))
-
-(defun get-widget-xy-in-stack (stack x y)
-  (some (lambda (window)
-          (get-window-widget-xy window x y))
-        stack))
-
-(defun get-widget-xy (x y)
-  (get-widget-xy-in-stack *WINDOW-INPUT-STACK* x y))
-
-(defun get-widget-xy-below (window x y)
-  (let ((pos (position window *WINDOW-INPUT-STACK*)))
-    (if pos
-        (get-widget-xy-in-stack (nthcdr (1+ pos) *WINDOW-INPUT-STACK*) x y)
-        (get-widget-xy-in-stack *WINDOW-INPUT-STACK* x y))))
+;;------------------------------------------------------------------------------
 
 ; (&KEY) -> NIL
 ;; FIXME SHOULD BE A MACRO
@@ -242,10 +301,12 @@
                 (otherwise
                   (error "Unknown placement designator ~A." place)))
       (calculate-absolute-coordinates-in-window window)
-      (register-widgets widget))
+      ;;(register-widgets widget)
+      )
     (when group
       (add-window-to-group group window))
-    (push-window window)
+    (attach-window window)
+    (register-window window)
     (when visible
       (open-window window))
     (setf (gethash (window-internal-id window) *WINDOWS*) window)
@@ -269,6 +330,7 @@
                    :visible ,visible
                    :widget ,widget
                    :place (quote ,place)
+                   :trap-input ,trap-input
                    :trap-open ,trap-open
                    :trap-close ,trap-close
                    :group ,group)
@@ -305,7 +367,7 @@
             (when (window-active window)
               (format t "Key given to window: ~A.~%" (window-id window))
               (bubble-into key window))))
-        *WINDOW-INPUT-STACK*))
+        (reverse *WINDOW-STACK*)))
 
 (defun bubble-into (key window)
   (if (bubble-callback key window)

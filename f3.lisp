@@ -126,7 +126,7 @@
                :active nil
                :widget (make-image :background))
     
-    #+nil(defwindow :enter-highscore
+    (defwindow :enter-highscore
                :visible nil
                :active t
                :place :center
@@ -196,7 +196,6 @@
                                                  (make-game
                                                    :id :thegame
                                                    :background :gamegrid)))
-                                    (make-image :s0 :id :debug-image-xxxxxxxxx :visible nil)
                                     (make-particle-field 
                                       :id :poppy 
                                       :listen-events t)))
@@ -347,6 +346,11 @@
                                       :starty -50)
                                     (make-image :sky))))
     
+    #+nil(defwindow :looking-glass
+               :visible t
+               :active nil
+               :widget (make-debug-looking-glass *WINDOW-WIDTH* *WINDOW-HEIGHT* :id :looking-glass))
+    
     (defwindow :global-hotkeys
                :visible t
                :active t
@@ -354,9 +358,22 @@
                              (cond
                                ((key= key :scancode-d)
                                 (setf *DEBUG-WIDGET-BORDER* (not *DEBUG-WIDGET-BORDER*))
+                                t)
+                               ((key= key :scancode-l)
+                                (format t "FLIP LOOKING GLAS~%")
+                                (flipivate (find-window :looking-glass))
+                                t)
+                               ((key= key :scancode-a)
+                                (debug-print-active-windows)
+                                t)
+                               ((key= key :scancode-w)
+                                (debug-print-window-stack)
+                                t)
+                               ((key= key :scancode-v)
+                                (debug-print-visible-windows)
                                 t))))
     
-    (initialize-window-widgets)))
+    (initialize-windows)))
   
 (defun gameloop (renderer)        
   (format t "Entering game loop.~%")
@@ -370,16 +387,30 @@
                                     (cond 
                                       ((sdl2:scancode= (sdl2:scancode-value keysym) :scancode-escape)
                                        (sdl2:push-event :quit)))))
+                        
+                        ;; MOUSE
+                        (:mousemotion (:timestamp timestamp :x x :y y)
+                                      ;(format t "MOUSE XY: (~A;~A)~%" x y)
+                                      (track-mouse-movement x y))
+                        (:mousebuttondown (:timestamp timestamp :state state :button button :x x :y y)
+                                          (track-mouse-button-down button x y))
+                        (:mousebuttonup (:timestamp timestamp :state state :button button :x x :y y)
+                                        (track-mouse-button-up button x y))
+                        
+                        ;; EVENTS
+                        (:windowevent (:event event :type type :timestamp timestamp :data1 data1 :data2 data2)
+                                      (format t "Window event: ~A.~%" (translate-window-event event))
+                                      (cond
+                                        ((eq event !MOUSE-LEAVE!)
+                                         (track-mouse-movement -1 -1))))
+                        
                         (:keyup
                           )
                         (:idle ()
                                (let ((tick (get-internal-real-time)))
                                  (sdl2:set-render-draw-color renderer 255 0 60 0)
                                  (sdl2:render-clear renderer)
-                                 (paint-windows renderer tick)
-                                 
-                                 (when *debug-widget-border* (paint-debug-borders renderer))
-                                 
+                                 (paint-all-windows renderer tick :debug-borders *debug-widget-border*)                                 
                                  (sdl2:render-present renderer)))))  
     
 (defun start ()
@@ -396,9 +427,11 @@
   (format t "Highscore loaded.~%")
   (initialize-sprites)
   (format t "Sprites initialized.~%")
-  (initialize-widgets)
+  (glas-initialize-mouse-defaults)
+  (format t "Mouse support initialized.~%")
+  (glas-initialize-widget-defaults)
   (format t "Widgets initialized.~%")
-  (initialize-windows 190 419)
+  (glas-initialize-window-defaults 190 419)
   (format t "Windows initialized.~%")
   (unwind-protect 
     (sdl2:with-init (:everything)
@@ -436,3 +469,97 @@
               (name (cdr entry)))
           (set-entry-score widget points)
           (set-entry-name widget name))))))
+
+;;------------------------------------------------------------------------------
+
+#|
+#<AUTOWRAP:FOREIGN-RECORD SDL-WINDOW-EVENT {1002D9E4D3}>
+;   Valid fields:
+;     :DATA2 (SDL2-FFI:SINT32)
+;     :DATA1 (SDL2-FFI:SINT32)
+;     :PADDING3 (SDL2-FFI:UINT8)
+;     :PADDING2 (SDL2-FFI:UINT8)
+;     :PADDING1 (SDL2-FFI:UINT8)
+;     :EVENT (SDL2-FFI:UINT8)
+;     :WINDOW-ID (SDL2-FFI:UINT32)
+;     :TIMESTAMP (SDL2-FFI:UINT32)
+;     :TYPE (SDL2-FFI:UINT32)
+|#
+
+#|
+typedef enum
+{
+    SDL_WINDOWEVENT_NONE,           /**< Never used */
+    SDL_WINDOWEVENT_SHOWN,          /**< Window has been shown */
+    SDL_WINDOWEVENT_HIDDEN,         /**< Window has been hidden */
+    SDL_WINDOWEVENT_EXPOSED,        /**< Window has been exposed and should be
+                                         redrawn */
+    SDL_WINDOWEVENT_MOVED,          /**< Window has been moved to data1, data2
+                                     */
+    SDL_WINDOWEVENT_RESIZED,        /**< Window has been resized to data1xdata2 */
+    SDL_WINDOWEVENT_SIZE_CHANGED,   /**< The window size has changed, either as
+                                         a result of an API call or through the
+                                         system or user changing the window size. */
+    SDL_WINDOWEVENT_MINIMIZED,      /**< Window has been minimized */
+    SDL_WINDOWEVENT_MAXIMIZED,      /**< Window has been maximized */
+    SDL_WINDOWEVENT_RESTORED,       /**< Window has been restored to normal size
+                                         and position */
+    SDL_WINDOWEVENT_ENTER,          /**< Window has gained mouse focus */
+    SDL_WINDOWEVENT_LEAVE,          /**< Window has lost mouse focus */
+    SDL_WINDOWEVENT_FOCUS_GAINED,   /**< Window has gained keyboard focus */
+    SDL_WINDOWEVENT_FOCUS_LOST,     /**< Window has lost keyboard focus */
+    SDL_WINDOWEVENT_CLOSE,          /**< The window manager requests that the window be closed */
+    SDL_WINDOWEVENT_TAKE_FOCUS,     /**< Window is being offered a focus (should SetWindowInputFocus() on itself or a subwindow, or ignore) */
+    SDL_WINDOWEVENT_HIT_TEST        /**< Window had a hit test that wasn't SDL_HITTEST_NORMAL. */
+} SDL_WindowEventID;
+|#
+
+;; EVENT  4 = WINDOW MOVED
+;; EVENT 10 = MOUSE ENTER WINDOW
+;; EVENT 11 = MOUSE LEAVE WINDOW
+;; EVENT 12 = GAIN FOCUS
+;; EVENT 13 = LOST FOCUS
+;; EVENT 14 = WINDOW CLOSE
+;; EVENT 15 = OFFERED FOCUS
+
+#|
+;   #<AUTOWRAP:FOREIGN-RECORD SDL-MOUSE-MOTION-EVENT {1002D9E5D3}>
+;   Valid fields:
+;     :YREL (SDL2-FFI:SINT32)
+;     :XREL (SDL2-FFI:SINT32)
+;     :Y (SDL2-FFI:SINT32)
+;     :X (SDL2-FFI:SINT32)
+;     :STATE (SDL2-FFI:UINT32)
+;     :WHICH (SDL2-FFI:UINT32)
+;     :WINDOW-ID (SDL2-FFI:UINT32)
+;     :TIMESTAMP (SDL2-FFI:UINT32)
+;     :TYPE (SDL2-FFI:UINT32)
+|#
+
+#|
+;   #<AUTOWRAP:FOREIGN-RECORD SDL-MOUSE-BUTTON-EVENT {1002D9E613}>
+;   Valid fields:
+;     :Y (SDL2-FFI:SINT32)
+;     :X (SDL2-FFI:SINT32)
+;     :PADDING1 (SDL2-FFI:UINT8)
+;     :CLICKS (SDL2-FFI:UINT8)
+;     :STATE (SDL2-FFI:UINT8)
+;     :BUTTON (SDL2-FFI:UINT8)
+;     :WHICH (SDL2-FFI:UINT32)
+;     :WINDOW-ID (SDL2-FFI:UINT32)
+;     :TIMESTAMP (SDL2-FFI:UINT32)
+;     :TYPE (SDL2-FFI:UINT32)
+|#
+
+#|
+;   #<AUTOWRAP:FOREIGN-RECORD SDL-KEYBOARD-EVENT {1002D9E513}>
+;   Valid fields:
+;     :KEYSYM (SDL2-FFI:SDL-KEYSYM)
+;     :PADDING3 (SDL2-FFI:UINT8)
+;     :PADDING2 (SDL2-FFI:UINT8)
+;     :REPEAT (SDL2-FFI:UINT8)
+;     :STATE (SDL2-FFI:UINT8)
+;     :WINDOW-ID (SDL2-FFI:UINT32)
+;     :TIMESTAMP (SDL2-FFI:UINT32)
+;     :TYPE (SDL2-FFI:UINT32)
+|#

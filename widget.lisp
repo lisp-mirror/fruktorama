@@ -121,6 +121,8 @@
   children
   (x 0)
   (y 0)
+  ;(absolute-right 0)
+  ;(absolute-bottom 0)
   (offset-x 0)
   (offset-y 0)
   id
@@ -140,8 +142,7 @@
 (defgeneric get-widget-children (widget))
 (defmethod get-widget-children (widget)
   "Returns the widget's children. Overriding it is ONLY necessary
-  if the children are not stored in the CHILDREN slot and
-  the widget wants to rely on the default painting."
+  if the children are not stored in the CHILDREN slot."
   (widget-children widget))
 
 (defun widget-absolute-right (widget)
@@ -149,6 +150,33 @@
 
 (defun widget-absolute-bottom (widget)
   (+ (widget-y widget) (widget-height widget)))
+
+;-------------------------------------------------------------------------
+
+(defun within (widget x y)
+  (and (>= x (widget-x widget))
+       (>= y (widget-y widget))
+       (< x (widget-absolute-right widget))
+       (< y (widget-absolute-bottom widget))))
+
+(defun search-widget-xy (widget x y)
+  (when (within widget x y)
+    (format t "SEARCH-WIDGET-XY (~A;~A) ▶ ~A (~A).~%" x y (type-of widget) (widget-id widget))
+    (format t "    XYWH (~A;~A;~A;~A) " (widget-x widget) (widget-y widget) (widget-width widget) (widget-height widget))
+    (format t "RB (~A;~A)~%" (widget-absolute-right widget) (widget-absolute-bottom widget))
+    (if (widget-opaque widget)
+        widget
+        (search-into-widget-xy widget x y))))
+
+(defun search-into-widget-xy (widget x y)
+  (let ((narrow (some (lambda (child)
+                        (search-widget-xy child x y))
+                      (get-widget-children widget))))
+    (if narrow
+        narrow
+        widget)))
+
+;-------------------------------------------------------------------------
 
 (defun get-widget-at (widget x y)
   (let ((wx (widget-x widget))(wy (widget-y widget))
@@ -165,10 +193,8 @@
                     subwidget
                     widget)))))))
 
-(defun paint-widget-debug-border (widget renderer)
-  "Debug function that paints a border around all widgets."
-  (when widget
-    (let ((color (widget-debug-border-color widget)))
+(defun paint-debug-border (widget renderer)
+  (let ((color (widget-debug-border-color widget)))
       (sdl2:set-render-draw-color renderer
                                   (color-r color)
                                   (color-g color)
@@ -182,9 +208,7 @@
                        (widget-width widget)
                        (widget-height widget)))
           (setf (widget-debug-border-rect widget) rect))
-        (sdl2:render-draw-rect renderer rect)))
-    (each-widget-child widget child
-                       (paint-widget-debug-border child renderer))))
+        (sdl2:render-draw-rect renderer rect))))
 
 (defun add-adjust-accordingly (widget child)
   "Adds the child to the widget and resizes widget to match the child."
@@ -246,12 +270,12 @@
     "Widget event issued when the window is closed. Does not pass through opaque widgets."))
 (defmethod widget-event-close (widget))
 
-(defgeneric widget-event-init (widget)
+(defgeneric widget-event-init (widget window)
   (:documentation
     "Widget event issued after all windows are defined and all widgets are registered.
     Provides means to do post initialization.
     This event will pass through opaque widgets."))
-(defmethod widget-event-init (widget))
+(defmethod widget-event-init (widget window))
 
 (defgeneric widget-event-mouse-enter (widget)
   (:documentation
@@ -327,26 +351,6 @@
           (some (lambda (child)
                   (widget-propagate-onkey-down child key))
                 children)))))
-      
-    #|    
-      (if (widget-opaque widget)
-          (progn
-            (format t "  Stopped at opaque widget (~A): ~A.~%" (type-of widget) (widget-id widget))
-            nil)
-          (each-widget-child widget child
-                             (catch 'stopped-opaque
-                               (widget-propagate-onkey-down child key))))))
-
-  (when (widget-event-onkey-down widget key)
-    (format t "  Handled by widget (~A): ~A.~%" (type-of widget) (widget-id widget))
-    (throw 'onkey-event-success t))
-  (when (widget-opaque widget)
-    (format t "  Stopped at opaque widget (~A): ~A.~%" (type-of widget) (widget-id widget))
-    (throw 'stopped-opaque nil))
-  (each-widget-child widget child
-                     (catch 'stopped-opaque
-                       (widget-propagate-onkey-down child key))))
-|#
 
 (defun widget-propagate-calculate-xy (widget)
   (widget-propagate-calculate-xy-children widget (get-widget-children widget))
@@ -375,21 +379,23 @@
     (each-widget-child widget child
                        (widget-propagate-close child))))
 
-(defun widget-propagate-init (widget)
+(defun widget-propagate-init (widget window)
   (format t "  Initializing widget (~A): ~A.~%"
           (symbol-name (type-of widget))
           (widget-id widget))
-  (widget-event-init widget)
+  (widget-event-init widget window)
   (each-widget-child widget child
-                     (widget-propagate-init child)))
+                     (widget-propagate-init child window)))
 
 ;; OPAQUE SHOULD BE OBEYED, BUT ARE THEY DESIGNED TO
-(defun widget-propagate-paint (widget renderer tick)
+(defun widget-propagate-paint (widget renderer tick debug-borders)
   (widget-event-prepaint widget renderer tick)
   (when (or (not (widget-opaque widget)) (widget-opaque-draw-exception widget))
     (each-widget-child widget child
-                       (widget-propagate-paint child renderer tick)))
-  (widget-event-paint widget renderer tick))
+                       (widget-propagate-paint child renderer tick debug-borders)))
+  (widget-event-paint widget renderer tick)
+  (when debug-borders
+    (paint-debug-border widget renderer)))
 
 (defun paint-children (children renderer tick)
   (dolist (child children)
@@ -398,7 +404,7 @@
 
 (defparameter *REGISTERED-WIDGETS* nil)
 
-(defun initialize-widgets ()
+(defun glas-initialize-widget-defaults ()
   (setf *REGISTERED-WIDGETS* (make-hash-table :test #'eq)))
 
 ; (WIDGET) -> NIL
@@ -521,7 +527,7 @@
     (format t " Created PANEL-WIDGET: ~A.~%" id)
     self))
 
-(defmethod widget-event-init ((w panel-widget))
+(defmethod widget-event-init ((w panel-widget) window)
   (let ((relief (panel-widget-relief w)))
     (setf (panel-widget-plate-rect w) (self-rectangle w :grow (- relief)))
     (setf (panel-widget-top-rect w) (self-rectangle w))
@@ -633,7 +639,7 @@
     (format t " Created CANVAS-WIDGET: ~A.~%" id)
     canvas))
 
-(defmethod widget-event-init ((w canvas-widget))
+(defmethod widget-event-init ((w canvas-widget) window)
   (setf (canvas-widget-rect w) (self-rectangle w)))
 
 (defmethod widget-event-prepaint ((w canvas-widget) renderer tick)
@@ -871,7 +877,8 @@
 (defstruct (debug-looking-glass-widget (:include widget))
   (outline-color +WHITE+)
   selected
-  outline)
+  outline
+  index)
 
 (defun make-debug-looking-glass (width height &key id)
   (let ((self (make-debug-looking-glass-widget
@@ -884,14 +891,21 @@
     (format t " Created DEBUG-LOOKING-GLASS-WIDGET: ~A.~%" id)
     self))
 
+(defmethod widget-event-init ((w debug-looking-glass-widget) window)
+  (format t "----------debug-looking-glass-widget: window-stack-index: ~A~%" (window-stack-index window))
+  (setf (debug-looking-glass-widget-index w) (1- (window-stack-index window)))
+  (format t "----------debug-looking-glass-widget: my stack index: ~A~%" (debug-looking-glass-widget-index w)))
+
 (defmethod widget-event-mouse-movement ((w debug-looking-glass-widget) x y)
-  (let ((widget (get-widget-xy-below (funcall (widget-window w)) x y)))
+  (format t "-----------widget-event-mouse-movement:debug-looking-glass-widget~%")
+  (let ((widget (search-stack-xy-from (debug-looking-glass-widget-index w) x y)))
     (unless (eq widget (debug-looking-glass-widget-selected w))
       (setf (debug-looking-glass-widget-selected w) widget)
       (when widget
-        (format t "LOOK: ~A = ~A~%" (type-of widget) (widget-id widget))))))
+        (format t "Looking glass (~A) sees: ~A (~A)~%" (widget-id widget) (type-of widget) (widget-id widget))))))
 
-(defmethod widget-event-mouse-leave ((w debug-looking-glass-widget))
+(defmethod widget-event-mouse-leave ((w debug-looking-glass-widget)) ;; aölkdjfaösjfdö DISPATCHED!!!
+  (format t "----------widget-event-mouse-leave:debug-looking-glass-widget~%")
   (setf (debug-looking-glass-widget-selected w) nil)
   (setf (debug-looking-glass-widget-outline w) nil))
 

@@ -164,7 +164,6 @@
 
 ; (&KEY) -> FLIPBOOK-WIDGET
 (defun make-flipbook (&key id images (initial 0))
-  (format t "----------make-flipbook~%")
   (let ((widget (initialize-flipbook (make-flipbook-widget) id images initial)))
     (format t " Created FLIPBOOK-WIDGET: ~A.~%" id)
     widget))
@@ -246,7 +245,6 @@
   digits)
 
 (defun make-scoreboard (images &key id (digits 5) (initial 0) (events nil))
-  (format t "----------make-scoreboard~%")
   (let ((widget (initialize-scoreboard (make-scoreboard-widget) 
                                        images
                                        id 
@@ -349,155 +347,8 @@
   (call-next-method))
 
 (defmethod widget-event-absolute-xy ((widget highscore-widget))
-  (format t "----------A~%")
   (widget-propagate-calculate-xy-children widget
-                                          (highscore-widget-secondary-display widget))
-  (format t "----------B~%"))
-
-;;------------------------------------------------------------------------------
-#|
-(defstruct (scoreboard-widget (:include widget))
-  points
-  digits
-  composition
-  pix-width
-  pixmaps)
-
-(defun make-scoreboard (&key id (digits 5) images (initial 0) (listen-events nil))
-  (let ((widget (initialize-scoreboard (make-scoreboard-widget) 
-                                       id 
-                                       digits 
-                                       images 
-                                       initial
-                                       listen-events)))
-    (format t "Created SCOREBOARD-WIDGET: ~A.~%" id)
-    widget))
-
-(defun initialize-scoreboard (widget id digits images initial listen-events)
-  (unless (or (numberp digits) (> digits 0))
-    (error "SCOREBOARD-WIDGET (~A) Number of digits must be positive: ~A~%" id digits))
-  (unless (or images (listp images))
-    (error "SCOREBOARD-WIDGET (~A) IMAGES is either NIL or not a list: ~A~%" id images))
-  
-  (let ((pixmaps (get-pixmaps-array images)))
-    (unless (verify-pixmaps-dimensions pixmaps)
-      (error "SCOREBOARD-WIDGET (~A) Uneven dimensions.~%"))
-    (let ((height (pixmap-height (aref pixmaps 0)))
-          (width (pixmap-width (aref pixmaps 0))))
-      (let ((board (initialize-struct widget
-                     :id id
-                     :pix-width width
-                     :digits digits
-                     :pixmaps pixmaps
-                     :width (* width digits)
-                     :height height
-                     :points initial
-                     :composition (make-array (list digits)))))
-        (compute-composition board)
-        (when listen-events
-          (attach-event-handler board :SET-SCORE)
-          (attach-event-handler board :RESET-SCORE))
-        board))))
-
-(defgeneric reset-scoreboard (widget))
-(defmethod reset-scoreboard ((widget scoreboard-widget))
-  (set-score widget 0))
-
-(defmethod widget-event-paint ((w scoreboard-widget) renderer tick)
-  (let ((pixw (scoreboard-widget-pix-width w)))
-    (loop for pixmap across (scoreboard-widget-composition w) for index from 0 do
-          (paint-descriptor pixmap 
-                            renderer 
-                            (+ (widget-x w) (* pixw index)) 
-                            (widget-y w)
-                            tick))))
-
-; (WIDGET, INT) -> NIL
-(defgeneric set-score (widget points))
-(defmethod set-score ((widget scoreboard-widget) points)
-  (setf (scoreboard-widget-points widget) (abs points))
-  (compute-composition widget))
-
-(defgeneric get-score (widget))
-(defmethod get-score ((widget scoreboard-widget))
-  (scoreboard-widget-points widget))
-
-; (INT, INT) -> STRING
-(defun points-to-text (points digits)
-  (let ((text (write-to-string points)))
-    (let ((diff (- digits (length text))))
-      (cond
-        ((< diff 0) ;(subseq text (abs diff)))
-         (make-string digits :initial-element #\9))
-        ((> diff 0) (concatenate 'string
-                                 (make-string diff :initial-element #\0)
-                                 text))
-        (t text)))))
-
-; STRING -> LIST
-(defun text-to-digits (text)
-  (mapcar
-    (lambda (c)
-      (- (char-code c) (char-code #\0)))
-    (coerce
-      text
-      'list)))
-
-; SCOREBOARD-WIDGET -> NIL
-(defun compute-composition (board)
-  (let ((points (scoreboard-widget-points board)))
-    (let ((text (points-to-text points (scoreboard-widget-digits board))))
-      (let ((digits (text-to-digits text)))
-        (loop for digit in digits for index from 0  do
-              (setf (aref (scoreboard-widget-composition board) index)
-                    (aref (scoreboard-widget-pixmaps board) digit)))))))
-
-(defmethod widget-event-handle ((widget scoreboard-widget) event payload)
-  (cond
-    ((eq event :SET-SCORE) (set-score widget payload))
-    ((eq event :RESET-SCORE) (reset-scoreboard widget))))
-
-;;------------------------------------------------------------------------------
-
-(defstruct (highscoreboard-widget (:include scoreboard-widget))
-  red-pixmaps
-  green-pixmaps
-  in-the-green)
-
-(defun make-highscoreboard (&key id (digits 5) red green (initial 0) (listen-events nil))
-  (unless (> digits 0)
-    (error "HIGHSCOREBOARD-WIDGET (~A) Number of digits must be positive: ~A~%" id digits))
-  (unless (or red (listp red))
-    (error "HIGHSCOREBOARD-WIDGET (~A) RED is either NIL or not a list: ~A~%" id red))
-  (unless (or green (listp green))
-    (error "HIGHSCOREBOARD-WIDGET (~A) GREEN is either NIL or not a list: ~A~%" id green))
-  (let ((board (initialize-highscoreboard 
-                 (make-highscoreboard-widget) id digits red green initial listen-events)))
-    (format t "Created HIGHSCOREBOARD-WIDGET: ~A.~%" id)
-    board))
-
-(defun initialize-highscoreboard (widget id digits red green initial listen-events)
-  (initialize-scoreboard widget id digits red initial listen-events)
-  (let ((green-pixmaps (get-pixmaps-array green)))
-    (let ((board (initialize-struct widget     
-                                    :green-pixmaps green-pixmaps
-                                    :red-pixmaps (scoreboard-widget-pixmaps widget))))
-      board)))
-
-(defmethod reset-scoreboard ((widget highscoreboard-widget))
-  (setf (scoreboard-widget-pixmaps widget) (highscoreboard-widget-red-pixmaps widget))
-  (setf (highscoreboard-widget-in-the-green widget) nil)
-  (call-next-method))
-
-(defmethod set-score ((widget highscoreboard-widget) points)
-  (unless (highscoreboard-widget-in-the-green widget)
-    (when (highscore:worthy? points)
-      (setf (highscoreboard-widget-in-the-green widget) t)
-      (setf (scoreboard-widget-pixmaps widget) 
-            (highscoreboard-widget-green-pixmaps widget))))
-  (call-next-method))
-
-|#
+                                          (highscore-widget-secondary-display widget)))
 
 ;;------------------------------------------------------------------------------
 

@@ -12,6 +12,7 @@
   (
     (:file "highscore")
     (:file "sprite")
+    (:file "mouse")
     (:file "widget")
     (:file "window")
     (:file "gadgets")
