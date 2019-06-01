@@ -38,7 +38,7 @@
   (setf *HIGHSCORE-LIST*
         (butlast
           (sort
-            (cons (cons points name) *HIGHSCORE-LIST*)
+            (cons (list points name) *HIGHSCORE-LIST*)
             #'> 
             :key #'car))))
 
@@ -49,6 +49,7 @@
 (defun reset ()
   (setf *HIGHSCORE-LIST* (copy-list *DEFAULT-HIGHSCORE-LIST*)))
 
+;; FIXME: SANITIZE!
 (defun load-from (path)
   (reset)
   (if (probe-file path)

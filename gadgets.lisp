@@ -1,69 +1,54 @@
-
+;; gadgets.lisp
+;; Copyright Parasite Network 2018
+;; GPL3
 
 
 ;;------------------------------------------------------------------------------
-;; The FLIPPER-WIDGET is used to flip through an alphabet.
-
+;; FLIP-WIDIGT
 (defstruct (flipper-widget (:include widget))
-  alphabet
-  pixmap
-  (index 0)
-  total)
+  iterator)
 
-(defun make-flipper (alphabet-id &key (initial 0) id)
+(defun make-flipper (charmap &key id initial)
   (let ((widget (initialize-flipper (make-flipper-widget)
-                                     alphabet-id
-                                     initial
-                                     id)))
+                                    charmap
+                                    id
+                                    initial)))
     (format t " Created FLIPPER-WIDGET: ~A.~%" id)
     widget))
-  
-(defun initialize-flipper (widget alphabet-id initial id)
-  (let ((alphabet-descriptor (get-charmap alphabet-id :on-failure-nil t)))
-    (unless alphabet-descriptor
-      (error "(initialize-flipper) FLIPPER-WIDGET (~A) Invalid charmap id: ~A."
-             id alphabet-id))
-    (unless (or (numberp initial) (plusp initial))
-      (error "(initialize-flipper) FLIPPER-WIDGET (~A) Invalid INITIAL index: ~A."
-             id initial))
-    (let ((flipper (initialize-struct widget
-                                      :alphabet alphabet-descriptor
-                                      :index initial
-                                      :id id
-                                      :opaque t
-                                      :opaque-draw-exception nil
-                                      :total (charmap-descriptor-total alphabet-descriptor)
-                                      :width (charmap-descriptor-width alphabet-descriptor)
-                                      :height (charmap-descriptor-height alphabet-descriptor))))
-      (flip-index-by flipper initial)
-      (update-flipper-pixmap flipper)
-      flipper)))
 
-(defun flip-index-by (flipper offset)
-  (with-slots ((index% index)
-               (total% total))
-              flipper
-              (setf index% (mod (+ index% offset) total%))))
+(defun initialize-flipper (widget charmap-id id initial)
+  (let* ((charmap (get-charmap charmap-id))
+         (flipper (initialize-struct widget
+                                     :iterator (make-translator-iterator charmap :initial initial)
+                                     :id id
+                                     :opaque t
+                                     :opaque-draw-exception nil
+                                     :width (charmap-descriptor-width charmap)
+                                     :height (charmap-descriptor-height charmap))))
+    flipper))
 
-(defun update-flipper-pixmap (widget)
-  (setf (flipper-widget-pixmap widget)
-        (get-charmap-pixmap
-          (flipper-widget-alphabet widget)
-          (flipper-widget-index widget))))
+(defun set-flipper-key (widget key)
+  (set-current-iterator-key (flipper-widget-iterator widget) key))
 
-(defmethod widget-event-paint ((w flipper-widget) renderer tick)
-  (paint-descriptor (flipper-widget-pixmap w) renderer (widget-x w) (widget-y w) tick))
+(defun get-flipper-key (widget)
+  (get-current-iterator-key (flipper-widget-iterator widget)))
 
-(defmethod widget-event-onkey-down ((flipper flipper-widget) key)
-  (keycase key
-    (:scancode-down
-     (flip-index-by flipper -1)
-     (update-flipper-pixmap flipper)
-     t)
-    (:scancode-up
-     (flip-index-by flipper 1)
-     (update-flipper-pixmap flipper)
-     t)))
+(defmethod widget-event-paint ((widget flipper-widget) renderer tick)
+  (paint-descriptor (get-iterator-pixmap (flipper-widget-iterator widget))
+                    renderer
+                    (widget-x widget) 
+                    (widget-y widget) 
+                    tick))
+
+(defmethod widget-event-onkey-down ((widget flipper-widget) key)
+  (let ((iterator (flipper-widget-iterator widget)))
+    (keycase key
+             (:scancode-down
+               (next iterator)
+               t)
+             (:scancode-up
+               (prev iterator)
+               t))))
 
 ;;------------------------------------------------------------------------------
 
@@ -79,10 +64,11 @@
     widget))
 
 (defun initialize-tag (alphabet-id id initial chevron letters)
-  (unless letters
-    (setf letters (length initial)))
   (unless (or letters (typep letters 'number) (> letters 0))
     (error "(make-tag) TAG-WIDGET (~A) Invalid number of letters: ~A~%" id letters))
+  (when initial
+    (unless (equal (length initial) letters)
+      (error "TAG-WIDGET (~A): The length of INITIAL (~A) must be equal to LETTERS (~A)." id initial letters)))
   (let ((flippers
           (loop for i below letters collect
                 (make-box
@@ -93,13 +79,16 @@
                                            (let ((image (make-image chevron :visible nil)))
                                              (setf (widget-local-id image) :local-chevron)
                                              image)) 
-                                       (make-flipper alphabet-id
-                                                     :initial (nth i initial))))))))
+                                       (let ((flipper (make-flipper alphabet-id
+                                                                    :initial (if initial
+                                                                                 (elt initial i)
+                                                                                 nil))))
+                                         (setf (widget-local-id flipper) :local-flipper)
+                                         flipper)))))))
     (let ((bag (make-bag
                  :align :middle
                  :spacing 0
                  :widgets flippers)))
-      
       (let ((tag (make-tag-widget
                    :id id
                    :width (widget-width bag)
@@ -115,48 +104,49 @@
 (defun show-tag-chevron (tag visible)
   (with-slots ((selected% selected)
                (flippers% flippers)) tag
-              (let ((chevron (search-widget-by-local-id
-                               (aref flippers% selected%)
-                               :local-chevron)))
+              (let ((chevron (search-widget-by-local-id (aref flippers% selected%) :local-chevron)))
                 (when chevron
                   (switch-image-visibility chevron visible)))))
 
-(defun flip-the-tag (widget offset)
-  (show-tag-chevron widget nil)
-  (let ((selected (tag-widget-selected widget)))
-    (incf selected offset)
-    (setf selected (mod selected (tag-widget-total widget)))
-    (setf (tag-widget-selected widget) selected)
-    (show-tag-chevron widget t)))
+(defun switch-tag-by-offset (widget offset)
+  (let ((current (tag-widget-selected widget)))
+    (incf current offset)
+    (let ((next (mod current (tag-widget-total widget))))
+      (switch-tag widget next))))
 
-(defun set-tag-name (widget &optional name)
-  (unless name
-    (setf name (loop repeat (tag-widget-total widget) collect 0)))
-  (let ((flippers (tag-widget-flippers widget)))
-    (let ((size (min (length name) (length flippers))))
-      (dotimes (index size)
-        (flip-index-by (search-widget-by-type (aref flippers index) 'flipper-widget)
-                           (nth index name))))))
+(defun switch-tag (widget select)
+  (unless (and (>= select 0)
+               (< select (tag-widget-total widget)))
+    (error "TAG-WIDGET (~A): Cannot switch to invalid select: ~A." (widget-id widget) select))
+  (show-tag-chevron widget nil)
+  (setf (tag-widget-selected widget) select)
+  (show-tag-chevron widget t))
+
+(defun set-tag-name (widget name)
+  (loop for flipper across (tag-widget-flippers widget) for bokstav across name do
+        (set-flipper-key (search-widget-by-local-id flipper :local-flipper) bokstav)))
 
 (defun get-tag-name (widget)
-  (loop for flipper across (tag-widget-flippers widget)
-        collect (flipper-widget-index (search-widget-by-type flipper 'flipper-widget))))
+  (coerce (loop for flipper across (tag-widget-flippers widget)
+                collect (get-flipper-key (search-widget-by-local-id flipper :local-flipper)))
+          'string))
 
-(defmethod widget-event-onkey-down ((w tag-widget) key)
+(defmethod widget-event-onkey-down ((widget tag-widget) key)
   (cond
     ((key= key :scancode-left)
-     (flip-the-tag w -1)
+     (switch-tag-by-offset widget -1)
      t)
     ((key= key :scancode-right)
-     (flip-the-tag w 1)
+     (switch-tag-by-offset widget +1)
      t)
     (t
       (widget-propagate-onkey-down
-        (aref (tag-widget-flippers w) 
-              (tag-widget-selected w))
+        (aref (tag-widget-flippers widget) 
+              (tag-widget-selected widget))
         key))))
 
 ;;------------------------------------------------------------------------------
+;; RENAME PICTUREBOOK-WIDGET
 
 (defstruct (flipbook-widget (:include widget))
   index
@@ -356,7 +346,7 @@
   tag-link
   scoreboard-link)
 
-(defun make-scoreentry (letter-charmap number-ids &key chevron editable (letters 3) (digits 5) emblem (initial-points 0) (initial-name '(0 0 0)) id)
+(defun make-scoreentry (letter-charmap number-ids &key chevron editable (letters 3) (digits 5) emblem (initial-points 0) initial-name id)
   (let ((bag (make-bag
                :align :center
                :widgets (list 
@@ -540,17 +530,14 @@
 
 (defun make-star-particle (widget)
   (let ((particle (%new-star-particle)))
-    (format t "---------pre~%")
     (initialize-star-particle widget particle)
-    (format t "---------post~%")
     particle))
 
 (defun initialize-star-particle (widget particle)
   (let ((particle2 (initialize-sprite particle
                                      (aref (star-rain-widget-pixmaps widget) 
                                            (random (length (star-rain-widget-pixmaps widget))))
-                                     :velocity #(0 70) ; (list 0 70)
-                                     ; :acceleration (list 0 0)
+                                     :velocity #(0 70)
                                      :pos (list (star-rain-widget-startx widget) 
                                                 (star-rain-widget-starty widget))
                                      :transform-x (lambda (sprite tick)

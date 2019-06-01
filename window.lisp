@@ -43,6 +43,9 @@
 (defparameter *DEBUG-WIDGET-BORDER* nil
   "When set will cause borders to be painted around widgets.")
 
+(defparameter *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE* nil
+  "When true it will print out the widget tree under the mouse cursor.")
+
 ; (INT, INT) -> NIL
 (defun glas-initialize-window-defaults (width height)
   (setf *WINDOWS* (make-hash-table :test #'eq))
@@ -52,6 +55,7 @@
   (setf *NAMED-WINDOWS* (make-hash-table :test #'eq))
   (setf *WINDOW-GROUPS* (make-hash-table :test #'eq))
   (setf *DEBUG-WIDGET-BORDER* nil)
+  (setf *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE* nil)
   (setf *WINDOW-WIDTH* width)
   (setf *WINDOW-HEIGHT* height)
   (setf *MOUSE-MOVEMENT-TRACKER* nil)
@@ -68,36 +72,40 @@
 
 (defun translate-window-event (event)
   (case event
+        (1 "WINDOW SHOWN")
+        (2 "WINDOW HIDDEN")
+        (3 "WINDOW EXPOSED")
         (4 "WINDOW MOVED")
         (10 "MOUSE ENTER")
         (11 "MOUSE LEAVE")
-        (12 "GAIN FOCUS")
-        (13 "LOST FOCUS")
+        (12 "GAIN KEYBOARD FOCUS")
+        (13 "LOST KEYBOARD FOCUS")
         (14 "WINDOW CLOSE")
-        (15 "OFFERED FOCUS")
+        (15 "TAKE FOCUS")
         (otherwise event)))
 
+;;------------------------------------------------------------------------------
+
 (defun debug-print-active-windows ()
-  (format t "█████████ Active windows (input order is bottom up)~%")
-  (map nil (lambda (window)
-             (when (window-active window)
-               (format t "█    ~A~%" (window-id window))))
-       *WINDOW-STACK*)
-  (format t "█████████~%"))
+  (debug-print-window-stack "Active windows" (lambda (window)
+                                               (window-active window))))
 
 (defun debug-print-visible-windows ()
-  (format t "█████████ Visible windows~%")
-  (map nil (lambda (window)
-             (when (window-visible window)
-               (format t "█    ~A~%" (window-id window))))
-       *WINDOW-STACK*)
-  (format t "█████████~%"))
+  (debug-print-window-stack "Visible windows" (lambda (window)
+                                                (window-visible window))))
 
-(defun debug-print-window-stack ()
-  (format t "█████████ Window stack~%")
-  (loop for x from 0 below (fill-pointer *WINDOW-STACK*) do
-        (format t "█   ~A: ~A~%" x (window-id (aref *WINDOW-STACK* x))))
-  (format t "█████████~%"))
+(defun debug-print-all-windows ()
+  (debug-print-window-stack "All windows" (lambda (window) 
+                                            t)))
+
+(defun debug-print-window-stack (title predicate)
+  (format t "╔════════  ~A~%" title)
+  (loop for window across *WINDOW-STACK* do
+    (when (funcall predicate window)
+      (format t "║   ~2@A: ~A~%" (window-stack-index window) (window-id window))))
+  (format t "╚════════ ~%"))
+
+;;------------------------------------------------------------------------------
 
 ; (INT, INT) -> INT
 (defun calc-offset-within (container child)
@@ -132,9 +140,6 @@
 (defun attach-window (window)
   (let ((index (vector-push-extend window *WINDOW-STACK*)))
     (setf (window-stack-index window) index)
-    ;(setf *WINDOW-INPUT-STACK* (coerce (reverse *WINDOW-STACK*) 'list))
-    ;(setf *WINDOW-INPUT-STACK* (reverse *WINDOW-STACK*))
-    ;(setf (window-internal-input-layer window) (length *WINDOW-INPUT-STACK*))
     nil))
 
 (defun register-window (window)
@@ -241,25 +246,32 @@
 ;;------------------------------------------------------------------------------
 ;; Searching for a widget using the input stack order (reverse paint order).
 
+(defun prettyprint-widget-tree (window tree)
+  (format t "╳ ~A (~A)~%" (type-of window) (window-id window))
+  (let ((indent 2))
+    (dolist (widget tree)
+      (format t "~{ ~*~}╰ ~A (~A)~%" (make-list indent) (type-of widget) (widget-id widget))
+      (incf indent 2))))
+
 (defun search-stack-xy (x y)
   "Searches for the widget at X and Y beginning at the top of the stack."
   (search-stack-xy-from (1- (fill-pointer *WINDOW-STACK*)) x y))
 
 (defun search-stack-xy-from (index x y)
   "Searches for the widget at X and Y beginning at stack index INDEX."
-  (format t "-----------search-stack-xy-from: ~A~%" index)
   (loop for i from index downto 0
         do (let ((result (search-window-xy (aref *WINDOW-STACK* i) x y)))
              (when result
-               (return-from search-stack-xy-from result)))))
+               (when *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE*
+                 (prettyprint-widget-tree (aref *WINDOW-STACK* i) result))
+               (return-from search-stack-xy-from (car (last result)))))))
 
 (defun search-window-xy (window x y)
   "Searches the WINDOW for the widget at X and Y."
   (when (window-visible window)
-    (when t;(window-active window)
-      (let ((widget (window-widget window)))
-        (when widget
-          (search-widget-xy widget x y))))))
+    (let ((widget (window-widget window)))
+      (when widget
+        (search-widget-xy widget x y)))))
 
 ;;------------------------------------------------------------------------------
 
@@ -324,7 +336,7 @@
                         (disabled nil))
   (unless disabled
     `(progn
-       (format t "Creating window: ~A.~%" ,id)
+       (format t "~&Creating window: ~A.~%" ,id)
        (defwindow% ,id 
                    :active ,active
                    :visible ,visible

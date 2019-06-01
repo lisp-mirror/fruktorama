@@ -683,7 +683,7 @@
          (if (setf (game-widget-paused w) (not (game-widget-paused w)))
              (open-window-by-id :paused)
              (close-window-by-id :paused))
-         t)             
+         t)           
         ((sdl2:scancode= (sdl2:scancode-value key) :scancode-down)
          (set-state (game-widget-status w) :drop)
          t)))))

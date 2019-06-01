@@ -14,20 +14,12 @@
       BOX-WIDGET
       
       MENU-WIDGET
-      FLIPPER-WIDGET
-      TAG-WIDGET
-      SCOREBOARD-WIDGET
-      HIGHSCOREBOARD-WIDGET
-      SCOREENTRY-WIDGET
-      FLIPBOOK-WIDGET
-      PARTICLE-FIELD-WIDGET
-      STAR-RAIN-WIDGET
     
     All widgets derive from WIDGET which provides the default behavior.
 |#
 
 ;-------------------------------------------------------------------------
-;; Auxiliary 
+;; Colour
 
 (defstruct color
   (r 255);(random 256))
@@ -50,9 +42,12 @@
                               (color-b color)
                               (color-a color)))
 
+;-------------------------------------------------------------------------
+
 ; WIDGET -> SDL2:RECT
 (defun self-rectangle (widget &key (dx 0) (dy 0) (dw 0) (dh 0) (grow 0))
-  "Creates a rectangle that matches the widget's shape."
+  "Creates a rectangle that matches the widget's shape. It can also
+  displace and grow the rectangle."
   (sdl2:make-rect
     (+ (widget-x widget) dx (- grow))
     (+ (widget-y widget) dy (- grow))
@@ -154,44 +149,27 @@
 ;-------------------------------------------------------------------------
 
 (defun within (widget x y)
+  "Checks if X and Y lies within the borders of the WIDGET."
   (and (>= x (widget-x widget))
        (>= y (widget-y widget))
        (< x (widget-absolute-right widget))
        (< y (widget-absolute-bottom widget))))
 
 (defun search-widget-xy (widget x y)
+  "Searches the widget tree with WIDGET as root looking for the deepest widget at X and Y.
+  It does not enter opaque widgets. The result is a list of widgets from top to bottom."
   (when (within widget x y)
-    (format t "SEARCH-WIDGET-XY (~A;~A) ▶ ~A (~A).~%" x y (type-of widget) (widget-id widget))
-    (format t "    XYWH (~A;~A;~A;~A) " (widget-x widget) (widget-y widget) (widget-width widget) (widget-height widget))
-    (format t "RB (~A;~A)~%" (widget-absolute-right widget) (widget-absolute-bottom widget))
+    ;(format t "SEARCH-WIDGET-XY (~A;~A) ▶ ~A (~A).~%" x y (type-of widget) (widget-id widget))
+    ;(format t "    XYWH (~A;~A;~A;~A) " (widget-x widget) (widget-y widget) (widget-width widget) (widget-height widget))
+    ;(format t "RB (~A;~A)~%" (widget-absolute-right widget) (widget-absolute-bottom widget))
     (if (widget-opaque widget)
-        widget
-        (search-into-widget-xy widget x y))))
-
-(defun search-into-widget-xy (widget x y)
-  (let ((narrow (some (lambda (child)
-                        (search-widget-xy child x y))
-                      (get-widget-children widget))))
-    (if narrow
-        narrow
-        widget)))
+        (list widget)
+        (cons widget
+              (some (lambda (child)
+                      (search-widget-xy child x y))
+                    (reverse (get-widget-children widget)))))))
 
 ;-------------------------------------------------------------------------
-
-(defun get-widget-at (widget x y)
-  (let ((wx (widget-x widget))(wy (widget-y widget))
-        (ww (widget-absolute-right widget))(wh (widget-absolute-bottom widget)))
-    (if (and (>= x wx) (>= y wy) (< x ww) (< y wh))
-        (progn
-          (format t "GET XY (~A;~A) ENTER (~A) XYWH (~A;~A;~A;~A) RB (~A;~A)~%" x y (type-of widget) wx wy (widget-width widget) (widget-height widget) ww wh)
-          (if (widget-opaque widget)
-              widget
-              (let ((subwidget (some (lambda (child)
-                                       (get-widget-at child x y))
-                                     (get-widget-children widget))))
-                (if subwidget
-                    subwidget
-                    widget)))))))
 
 (defun paint-debug-border (widget renderer)
   (let ((color (widget-debug-border-color widget)))
@@ -452,7 +430,6 @@
                     :height (pixmap-height pixmap)
                     :visible visible
                     :id id)))
-      (register-widget widget) ;; <<<<<< ?
       (format t " Created IMAGE-WIDGET: ~A.~%" id)
       widget)))
 

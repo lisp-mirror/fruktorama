@@ -38,8 +38,25 @@
                  (:rstar4 3 0)))
   (defanimation (list 50 50 50 50) (list :rstar1 :rstar2 :rstar3 :rstar4) :red-star)
   
-  (defcharmap "graphics/black-large-alfabet.png" renderer :black-large-alfabet 27 40 10 42)
-  (defcharmap "graphics/black-small-alfabet.png" renderer :black-small-alfabet 22 30 10 42)
+  (defcharmap "graphics/black-large-alfabet.png" renderer :black-large-alfabet 27 40 10 42
+              :translator '((#\A 0)(#\B 1)(#\C 2)(#\D 3)(#\E 4)
+                            (#\F 5)(#\G 6)(#\H 7)(#\I 8)(#\J 9)
+                            (#\K 10)(#\L 11)(#\M 12)(#\N 13)(#\O 14)
+                            (#\P 15)(#\Q 16)(#\R 17)(#\S 18)(#\T 19)
+                            (#\U 20)(#\Ü 21)(#\V 22)(#\W 23)(#\X 24)
+                            (#\Y 25)(#\Z 26)(#\Å 27)(#\Ä 28)(#\Æ 29)
+                            (#\Ö 30)(#\Ø 31))
+              :translator-unknown-default #\A)
+  
+  (defcharmap "graphics/black-small-alfabet.png" renderer :black-small-alfabet 22 30 10 42
+              :translator '((#\A 0)(#\B 1)(#\C 2)(#\D 3)(#\E 4)
+                            (#\F 5)(#\G 6)(#\H 7)(#\I 8)(#\J 9)
+                            (#\K 10)(#\L 11)(#\M 12)(#\N 13)(#\O 14)
+                            (#\P 15)(#\Q 16)(#\R 17)(#\S 18)(#\T 19)
+                            (#\U 20)(#\Ü 21)(#\V 22)(#\W 23)(#\X 24)
+                            (#\Y 25)(#\Z 26)(#\Å 27)(#\Ä 28)(#\Æ 29)
+                            (#\Ö 30)(#\Ø 31))
+              :translator-unknown-default #\A)
   
   (defresource "graphics/pokaler.png" renderer
                '(53 80
@@ -346,11 +363,6 @@
                                       :starty -50)
                                     (make-image :sky))))
     
-    #+nil(defwindow :looking-glass
-               :visible t
-               :active nil
-               :widget (make-debug-looking-glass *WINDOW-WIDTH* *WINDOW-HEIGHT* :id :looking-glass))
-    
     (defwindow :global-hotkeys
                :visible t
                :active t
@@ -360,14 +372,13 @@
                                 (setf *DEBUG-WIDGET-BORDER* (not *DEBUG-WIDGET-BORDER*))
                                 t)
                                ((key= key :scancode-l)
-                                (format t "FLIP LOOKING GLAS~%")
-                                (flipivate (find-window :looking-glass))
+                                (setf *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE* (not *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE*))
                                 t)
                                ((key= key :scancode-a)
                                 (debug-print-active-windows)
                                 t)
                                ((key= key :scancode-w)
-                                (debug-print-window-stack)
+                                (debug-print-all-windows)
                                 t)
                                ((key= key :scancode-v)
                                 (debug-print-visible-windows)
@@ -418,11 +429,11 @@
   (unless (probe-file "f3.asd")
     (format t "You need to be in the Fruktorama 3 directory for all assets to load properly.~%")
     (return-from start nil))
-  (highscore:set-defaults '((1966 . (20 26 8))
-                            (1752 . (24 28 24))
-                            (1304 . (22 31 25))
-                            (714 . (0 15 0))
-                            (57 . (10 21 10))))
+  (highscore:set-defaults '((5 "AAA")
+                            (4 "BBB")
+                            (3 "CCC")
+                            (2 "DDD")
+                            (1 "EEE")))
   (highscore:load-from *HIGHSCORE-PATH*)
   (format t "Highscore loaded.~%")
   (initialize-sprites)
@@ -460,13 +471,13 @@
 ;;------------------------------------------------------------------------------
     
 (defun load-higschore-entry (entry widget)
-  (set-entry-score widget 0)
-  (set-entry-name widget nil)
+  ;(set-entry-score widget 0)
+  ;(set-entry-name widget nil)
   (when (< entry (highscore:number-of-entries))
     (let ((entry (highscore:get-entry entry)))
       (when entry
         (let ((points (car entry))
-              (name (cdr entry)))
+              (name (cadr entry)))
           (set-entry-score widget points)
           (set-entry-name widget name))))))
 

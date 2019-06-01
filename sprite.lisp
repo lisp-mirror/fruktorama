@@ -287,7 +287,9 @@
   width 		; grid width
   height 		; grid height
   row			; number of chars on a row
-  total		; total number of chars UNUSED!
+  total		; total number of chars
+  translator
+  translator-unknown
   cache)		; computed sprite-descripors
 
 (defparameter *charmaps* (make-hash-table :test 'eq))
@@ -299,7 +301,7 @@
         (unless on-failure-nil
           (error "Unable to get charmap ~A~%" id)))))
 
-(defun create-charmap-descriptor (texture id width height row total)
+(defun create-charmap-descriptor (texture id width height row total translator unknown)
   (make-charmap-descriptor
     :id id
     :texture texture
@@ -309,19 +311,21 @@
     :total (if total
                total
                (* width height))
+    :translator translator ;;; ARRAY
+    :translator-unknown unknown
     :cache (make-hash-table :test #'eq)))
 
-(defun defcharmap (path renderer id width height row &optional total)
+(defun defcharmap (path renderer id width height row total &key translator translator-unknown-default)
   "Creates a charmap descriptor over the specified image FILE, and
 	 names it ID. WIDTH and HEIGHT are the dimensions of the grid cells,
 	 and ROW is the number of cells per row, and TOTAL is the number
 	 of valid indexes."
   (let ((texture (get-texture path renderer)))
-    (let ((charmap (create-charmap-descriptor texture id width height row total)))
+    (let ((charmap (create-charmap-descriptor texture id width height row total translator translator-unknown-default)))
       (setf (gethash id *charmaps*) charmap))))
 
 (defun extract-pixmap (charmap index)
-  "Creates a sprite descriptor over the charmap at the specified index."
+  "Creates a pixmap descriptor over the charmap at the specified index."
   (unless (or (>= index 0) (< index (charmap-descriptor-total charmap)))
     (error "charmap->sprite: Index ~A is out of bounds for ~A~%" index charmap))
   (let ((descriptor
@@ -332,9 +336,7 @@
             (charmap-descriptor-height charmap)
             (rem index (charmap-descriptor-row charmap)) ; x 
             (floor (/ index (charmap-descriptor-row charmap)))))) ; y
-    (format t "Created charmap (~A) pixmap index: ~A.~%"
-            (charmap-descriptor-id charmap) index)
-    (update-cached-descriptor charmap index descriptor)
+    (format t "Created PIXMAP-DESCRIPTOR for index ~A in charmap (~A).~%" index (charmap-descriptor-id charmap))
     descriptor))
 
 (defun get-charmap-pixmap (charmap index)
@@ -344,7 +346,9 @@
   (let ((descriptor (gethash index (charmap-descriptor-cache charmap))))
     (if descriptor
         descriptor
-        (extract-pixmap charmap index))))
+        (let ((pixmap (extract-pixmap charmap index)))
+          (update-cached-descriptor charmap index pixmap)
+          pixmap))))
 
 (defun export-charmap-pixmap (charmap index id)
 	"Names the sprite descriptor over CHARMAP at INDEX to ID and makes
@@ -353,6 +357,82 @@
 
 (defun update-cached-descriptor (charmap index descriptor)
 	(setf (gethash index (charmap-descriptor-cache charmap)) descriptor))
+
+
+;; FIXME SHOULD USE UNKNOWN!
+(defun charmap-translate-to-pixmap (charmap key)
+  (let ((table (charmap-descriptor-translator charmap)))
+    (when table
+      (let ((entry (assoc key table)))
+        (when entry
+          (let ((index (cadr entry)))
+            (get-charmap-pixmap charmap index)))))))
+
+;;------------------------------------------------------------------------------
+
+(defstruct (translator-iterator-class)
+  charmap
+  index
+  translator
+  size)
+
+(defun make-translator-iterator (charmap &key initial)
+  (let ((translator (charmap-descriptor-translator charmap)))
+    (unless translator
+      (error "The charmap (~A) doesn't have a translator to iterate over." (charmap-descriptor-id charmap)))
+    (let ((iterator (make-translator-iterator-class
+                      :charmap charmap
+                      :index 0
+                      :translator translator
+                      :size (length translator))))
+      (when initial
+        (set-current-iterator-key iterator initial))
+      (format t " Created TRANSLATOR-ITERATOR-CLASS for charmap (~A).~%" (charmap-descriptor-id charmap))
+      iterator)))
+
+(defun modulate (value offset total)
+  (mod (+ value offset) total))
+
+(defun next (tic)
+  (setf (translator-iterator-class-index tic)
+        (modulate (translator-iterator-class-index tic) +1 (translator-iterator-class-size tic))))
+
+(defun prev (tic)
+  (setf (translator-iterator-class-index tic)
+        (modulate (translator-iterator-class-index tic) -1 (translator-iterator-class-size tic))))
+
+(defun get-iterator-pixmap (tic)
+  (let ((charmap (translator-iterator-class-charmap tic))
+        (index (translator-iterator-class-index tic)))
+    (get-charmap-pixmap charmap index)))
+
+(defun get-current-iterator-key (tic)
+  (let ((translator (translator-iterator-class-translator tic))
+        (index (translator-iterator-class-index tic)))
+    (let ((entry (elt translator index)))
+      (car entry))))
+
+(defun translate-key-to-index (tic key)
+  (position key (translator-iterator-class-translator tic) :key #'car))
+
+(defun set-current-iterator-key (tic &optional key)
+  (let ((index (translate-key-to-index tic key)))
+    (if index
+        (setf (translator-iterator-class-index tic) index)
+        (progn
+          (format t "Translator for charmap (~A) could not reset to ~A.~%" 
+                  (charmap-descriptor-id (translator-iterator-class-charmap tic)) key)
+          (set-current-iterator-key-to-unknown tic)))))
+
+(defun set-current-iterator-key-to-unknown (tic)
+  (let ((charmap (translator-iterator-class-charmap tic)))
+    (let ((unknown (charmap-descriptor-translator-unknown charmap)))
+      (unless unknown
+        (error "Charmap (~A) doesn't have an unknown fallback." (charmap-descriptor-id charmap)))
+      (let ((index (translate-key-to-index tic unknown)))
+        (unless index
+          (error "Charmap's (~A) unknown fallback is invalid." (charmap-descriptor-id charmap)))
+        (setf (translator-iterator-class-index tic) index)))))
 
 ;;------------------------------------------------------------------------------
 
