@@ -662,29 +662,24 @@
                        (:dead)))))
 
 (defmethod widget-event-onkey-down ((w game-widget) key)
+  (keycase key
+           (:scancode-escape
+             (format t "GAME-WIDGET (~A): Escape caught!~%" (widget-id w))
+             (set-state (game-widget-status w) :gameover)
+             (close-window-by-id :paused)
+             (setf (game-widget-paused w) nil)))
   (when (eq (game-widget-status w) :play)
     (let ((grid (game-widget-grid w)))
-      (cond
-        ((key= key :scancode-escape)
-         (set-state (game-widget-status w) :gameover)
-         (close-window-by-id :paused)
-         (setf (game-widget-paused w) nil)
-         t)
-        ((sdl2:scancode= (sdl2:scancode-value key) :scancode-left)
-         (move-blokks grid -1 0)
-         t)
-        ((sdl2:scancode= (sdl2:scancode-value key) :scancode-right)
-         (move-blokks grid 1 0)
-         t)
-        ((sdl2:scancode= (sdl2:scancode-value key) :scancode-up)
-         (rotate-3-blokks grid)
-         t)
-        ((sdl2:scancode= (sdl2:scancode-value key) :scancode-space)
-         (if (setf (game-widget-paused w) (not (game-widget-paused w)))
-             (open-window-by-id :paused)
-             (close-window-by-id :paused))
-         t)           
-        ((sdl2:scancode= (sdl2:scancode-value key) :scancode-down)
-         (set-state (game-widget-status w) :drop)
-         t)))))
-           
+      (keycase key
+               (:scancode-left
+                 (move-blokks grid -1 0))
+               (:scancode-right
+                 (move-blokks grid +1 0))
+               (:scancode-up
+                 (rotate-3-blokks grid))
+               (:scancode-down
+                 (set-state (game-widget-status w) :drop))
+               (:scancode-space
+                 (if (setf (game-widget-paused w) (not (game-widget-paused w)))
+                     (open-window-by-id :paused)
+                     (close-window-by-id :paused)))))))

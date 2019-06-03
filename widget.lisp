@@ -18,6 +18,36 @@
     All widgets derive from WIDGET which provides the default behavior.
 |#
 
+#|
+(defpackage :glas
+  (:use :cl)
+  (:export
+    :localize
+    :search-widget-by-local-id
+    :keycase
+    :initialize-struct
+    
+    :widget
+    :widget-children
+    :widget-x
+    :widget-y
+    :widget-id
+    :widget-local-id
+    :widget-width
+    :widget-height
+    
+    :get-widget-children
+    :widget-absolute-right
+    :widget-absolute-bottom
+    
+    :attach-event-handler
+    :dispatch-event
+    
+    :widget-event-handle
+    :widget-event-prepaint
+    :widget-event-paint))
+|#  
+
 ;-------------------------------------------------------------------------
 ;; Colour
 
@@ -60,6 +90,16 @@
     `(let ((,children (get-widget-children ,widget)))
        (dolist (,child ,children)
          ,@body))))
+
+(defun localize (local-id widget)
+  (setf (widget-local-id widget) local-id)
+  widget)
+
+(defun add-adjust-accordingly (widget child)
+  "Adds the child to the widget and resizes widget to match the child."
+  (setf (widget-children widget) (list child))
+  (setf (widget-width widget) (widget-width child))
+  (setf (widget-height widget) (widget-height child)))
 
 ; (WIDGET,TYPESPEC) -> WIDGET | NIL
 (defun search-widget-by-type (widget type)
@@ -188,12 +228,6 @@
           (setf (widget-debug-border-rect widget) rect))
         (sdl2:render-draw-rect renderer rect))))
 
-(defun add-adjust-accordingly (widget child)
-  "Adds the child to the widget and resizes widget to match the child."
-  (setf (widget-children widget) (list child))
-  (setf (widget-width widget) (widget-width child))
-  (setf (widget-height widget) (widget-height child)))
-
 ;-------------------------------------------------------------------------
 ;; Event vector
 
@@ -237,6 +271,13 @@
     If the widget is opaque it must call WIDGET-PROPAGATE-ONKEY-DOWN
     on its own children if it wants to give them a chance to handle the input."))
 (defmethod widget-event-onkey-down (widget key))
+
+(defgeneric widget-event-onkey-up (widget key)
+  (:documentation
+    "This method must to be overridden if a widget needs to handle input.
+    If the widget is opaque it must call WIDGET-PROPAGATE-ONKEY-UP
+    on its own children if it wants to give them a chance to handle the input."))
+(defmethod widget-event-onkey-up (widget key))
 
 (defgeneric widget-event-open (widget)
   (:documentation
@@ -320,14 +361,20 @@
 ; These functions are used to start propagating events.
 
 (defun widget-propagate-onkey-down (widget key)
-  (if (widget-event-onkey-down widget key)
+  (widget-propagate-onkey widget key #'widget-event-onkey-down))
+
+(defun widget-propagate-onkey-up (widget key)
+  (widget-propagate-onkey widget key #'widget-event-onkey-up))
+
+(defun widget-propagate-onkey (widget key event)
+  (if (funcall event widget key)
       (progn
         (format t "  Handled by widget (~A): ~A.~%" (type-of widget) (widget-id widget))
         t)
       (unless (widget-opaque widget)
         (let ((children (get-widget-children widget)))
           (some (lambda (child)
-                  (widget-propagate-onkey-down child key))
+                  (widget-propagate-onkey child key event))
                 children)))))
 
 (defun widget-propagate-calculate-xy (widget)
@@ -422,9 +469,11 @@
   pixmap
   (visible t))
 
-(defun make-image (pid &key id (visible t))
-  (let ((pixmap (get-pixmap pid)))
-    (let ((widget (make-image-widget 
+(defun make-image (image &key id (visible t))
+  (let ((pixmap (get-pixmap image)))
+    (let ((widget (make-image-widget
+                    :opaque t
+                    :opaque-draw-exception nil
                     :pixmap pixmap
                     :width (pixmap-width pixmap)
                     :height (pixmap-height pixmap)
@@ -438,13 +487,16 @@
     (setf state (not (image-widget-visible widget))))
   (setf (image-widget-visible widget) state))
 
-(defmethod widget-event-paint ((w image-widget) renderer tick)
-  (when (image-widget-visible w)
-    (let ((pixmap (image-widget-pixmap w)))
-      (paint-descriptor pixmap renderer (widget-x w) (widget-y w) tick))))
+(defmethod widget-event-paint ((widget image-widget) renderer tick)
+  (when (image-widget-visible widget)
+    (paint-descriptor (image-widget-pixmap widget)
+                      renderer 
+                      (widget-x widget) 
+                      (widget-y widget) 
+                      tick)))
 
 ;;------------------------------------------------------------------------------
-
+#|
 (defstruct emboss-stylesheet
   (light (make-color :r 213 :g 213 :b 213))
   (dark (make-color :r 84 :g 84 :b 84))
@@ -538,10 +590,10 @@
       ;; Plate
       (set-render-coloring renderer plate-color)
       (sdl2:render-fill-rect renderer (panel-widget-plate-rect w)))))
-
+|#
 ;;------------------------------------------------------------------------------
 ;; Button
-
+#|
 (defstruct (button-widget (:include widget))
   "A button."
   active
@@ -598,34 +650,36 @@
                            (1- (widget-absolute-bottom w))
                            (1- (widget-absolute-right w))
                            (widget-y w))))
-
+|#
 ;;------------------------------------------------------------------------------
 
-(defstruct (canvas-widget (:include widget))
-  "The CANVAS-WIDGET is used to paint a background color behind a widget."
+(defstruct (background-widget (:include widget))
+  "The BACKGROUND-WIDGET is used to paint a background color behind a widget."
   color
   rect)
 
-(defun make-canvas (&key (color +BLACK+) id widget)
-  (let ((canvas (make-canvas-widget
-                  :color color
-                  :id id
-                  :width (widget-width widget)
-                  :height (widget-height widget)
-                  :children (list widget))))
-    (format t " Created CANVAS-WIDGET: ~A.~%" id)
-    canvas))
+(defun make-background (&key (color +BLACK+) id widget)
+  (unless widget
+    (error "BACKGROUND-WIDGET (~A): WIDGET cannot be NIL." id))
+  (let ((background (make-background-widget
+                      :color color
+                      :id id
+                      :width (widget-width widget)
+                      :height (widget-height widget)
+                      :children (list widget))))
+    (format t " Created BACKGROUND-WIDGET: ~A.~%" id)
+    background))
 
-(defmethod widget-event-init ((w canvas-widget) window)
-  (setf (canvas-widget-rect w) (self-rectangle w)))
+(defmethod widget-event-init ((widget background-widget) window)
+  (setf (background-widget-rect widget) (self-rectangle widget)))
 
-(defmethod widget-event-prepaint ((w canvas-widget) renderer tick)
-  (when (canvas-widget-color w)
-    (set-render-coloring renderer (canvas-widget-color w))
-    (sdl2:render-fill-rect renderer (canvas-widget-rect w))))
+(defmethod widget-event-paint ((widget background-widget) renderer tick)
+  (when (background-widget-color widget)
+    (set-render-coloring renderer (background-widget-color widget))
+    (sdl2:render-fill-rect renderer (background-widget-rect widget))))
 
 ;;------------------------------------------------------------------------------
-
+#|
 (defstruct (placeholder-widget (:include widget))
   )
 
@@ -642,7 +696,7 @@
   (setf (widget-children placeholder) (list widget))
   (when init
     (calculate-absolute-coordinates (widget-window placeholder) placeholder)))
-
+|#
 ;;-------------------------------------------------------------------------
 
 (defstruct (bag-widget (:include widget))
@@ -658,7 +712,7 @@
   CROSS            Stacked aligned to center point.
   Width and height is set to the largest value from the children, but can
   be overriden with FIXED-WIDTH and FIXED-HEIGHT.
-  Extra space between the children can applied with SPACING in all
+  Extra space between the children can be applied with SPACING in all
   layouts except STACK and CROSS.
   TODO: Implement FLOW to support column/row cutoff."
   fixed-width
@@ -666,6 +720,9 @@
   spacing
   align
   todo-flow)
+
+(defmacro zp (num)
+  `(not (minusp ,num)))
 
 (defun make-bag (&key (align :left) widgets fixed-height fixed-width (spacing 0) id)
   ;; We remove any NIL in the widget list.
@@ -680,7 +737,7 @@
       (error "BAG-WIDGET(~A): FIXED-HEIGHT must be a positive integer, not ~A.~%" id fixed-height))
     (setf fixed-height (truncate fixed-height)))
   ;; Also check the spacing.
-  (unless (and (numberp spacing) (>= spacing 0))
+  (unless (and (numberp spacing) (zp spacing))
     (error "BAG-WIDGET(~A): SPACING must be a non negative integer, not ~A.~%" id spacing))
   (setf spacing (truncate spacing))
   
@@ -702,23 +759,6 @@
            (:cross (bag-cross bag)))
     (format t " Created BAG-WIDGET: ~A.~%" id)
     bag))
-    
-(defun bag-stack (bag)
-  (let ((width 0)(height 0))
-    (dolist (widget (widget-children bag))
-      (setf width (max width (widget-width widget)))
-      (setf height (max height (widget-height widget))))
-    (setf (widget-width bag) width)
-    (setf (widget-height bag) height)))
-
-(defun bag-cross (bag)
-  (let ((width (calc-maximal-width bag))
-        (height (calc-maximal-height bag)))
-    (setf (widget-width bag) width)
-    (setf (widget-height bag) height)
-    (dolist (widget (widget-children bag))
-      (setf (widget-offset-x widget) (calc-offset-within width (widget-width widget)))
-      (setf (widget-offset-y widget) (calc-offset-within height (widget-height widget))))))
 
 (defun calc-maximal-width (bag)
   (let ((width (bag-widget-fixed-width bag)))
@@ -735,6 +775,23 @@
         (let ((maxheight 0))
           (dolist (w (widget-children bag) maxheight)
             (setf maxheight (floor (max maxheight (widget-height w)))))))))
+
+(defun bag-stack (bag)
+  (let ((width 0)(height 0))
+    (dolist (widget (widget-children bag))
+      (setf width (max width (widget-width widget)))
+      (setf height (max height (widget-height widget))))
+    (setf (widget-width bag) width)
+    (setf (widget-height bag) height)))
+
+(defun bag-cross (bag)
+  (let ((width (calc-maximal-width bag))
+        (height (calc-maximal-height bag)))
+    (setf (widget-width bag) width)
+    (setf (widget-height bag) height)
+    (dolist (widget (widget-children bag))
+      (setf (widget-offset-x widget) (calc-offset-within width (widget-width widget)))
+      (setf (widget-offset-y widget) (calc-offset-within height (widget-height widget))))))
 
 (defun bag-align-center (bag)
   (let ((maxwidth (calc-maximal-width bag))(y 0))
@@ -818,6 +875,12 @@
   (right 0))
 
 (defun make-box (&key padding (top 0) (bottom 0) (left 0) (right 0) widget id)
+  (unless widget
+    (error "BOX-WIDGET (~A): WIDGET cannot be NIL." id))
+  (unless (and (numberp top) (numberp bottom) (numberp left) (numberp right))
+    (error "BOX-WIDGET (~A): TOP, BOTTOM, LEFT and RIGHT must be numbers. Not: ~A, ~A, ~A and ~A." id top bottom left right))
+  (unless (and (zp top) (zp bottom) (zp left) (zp right))
+    (error "BOX-WIDGET (~A): TOP, BOTTOM, LEFT and RIGHT must be positive. Not: ~A, ~A, ~A and ~A." id top bottom left right))
   (when padding
     (etypecase padding
                (list
@@ -831,7 +894,7 @@
                (integer
                  (setf top padding bottom padding left padding right padding))
                (t                 
-                 (error "Unknown padding format ~A." padding))))
+                 (error "BAG-WIDGET (~A): Unknown padding format ~A." id padding))))
     
   (let ((box (make-box-widget
                :top top
@@ -850,7 +913,7 @@
     box))
 
 ;;------------------------------------------------------------------------------
-
+#|
 (defstruct (debug-looking-glass-widget (:include widget))
   (outline-color +WHITE+)
   selected
@@ -896,7 +959,7 @@
     (when outline
       (set-render-coloring renderer (debug-looking-glass-widget-outline-color w))
       (sdl2:render-fill-rect renderer outline))))
-
+|#
 ;;------------------------------------------------------------------------------
 ;;------------------------------------------------------------------------------
 ;;------------------------------------------------------------------------------

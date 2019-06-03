@@ -390,18 +390,21 @@
   (format t "Entering game loop.~%")
   (sdl2:with-event-loop (:method :poll)
                         (:quit () t)
+                        
+                        ;; KEY
                         (:keydown (:keysym keysym)
-                                  (format t "Key input: (~A) ~A.~%"
+                                  (format t "Key DOWN: (~A) ~A.~%"
                                           (sdl2:scancode-value keysym)
                                           (sdl2:scancode keysym))                                  
-                                  (unless (window-event-onkey-down keysym)
-                                    (cond 
-                                      ((sdl2:scancode= (sdl2:scancode-value keysym) :scancode-escape)
-                                       (sdl2:push-event :quit)))))
+                                  (window-event-onkey-down keysym))
+                        (:keyup (:keysym keysym)
+                                (format t "Key UP: (~A) ~A.~%"
+                                        (sdl2:scancode-value keysym)
+                                        (sdl2:scancode keysym))                                  
+                                (window-event-onkey-up keysym))
                         
                         ;; MOUSE
                         (:mousemotion (:timestamp timestamp :x x :y y)
-                                      ;(format t "MOUSE XY: (~A;~A)~%" x y)
                                       (track-mouse-movement x y))
                         (:mousebuttondown (:timestamp timestamp :state state :button button :x x :y y)
                                           (track-mouse-button-down button x y))
@@ -414,15 +417,13 @@
                                       (cond
                                         ((eq event !MOUSE-LEAVE!)
                                          (track-mouse-movement -1 -1))))
-                        
-                        (:keyup
-                          )
+
                         (:idle ()
                                (let ((tick (get-internal-real-time)))
                                  (sdl2:set-render-draw-color renderer 255 0 60 0)
                                  (sdl2:render-clear renderer)
                                  (paint-all-windows renderer tick :debug-borders *debug-widget-border*)                                 
-                                 (sdl2:render-present renderer)))))  
+                                 (sdl2:render-present renderer)))))
     
 (defun start ()
   (format t "Starting F3.~%")
@@ -449,8 +450,8 @@
                     (format t "SDL2 initialized.~%")
                     (sdl2-image:init '(:png))
                     (format t "SDL2-Image initialized.~%")
-                    (setf *window-width* 190)
-                    (setf *window-height* 419)
+                    ;(setf *window-width* 190)
+                    ;(setf *window-height* 419)
                     (sdl2:with-window (win :w *window-width* :h *window-height* :title "F3" :flags '(:shown))
                                       (format t "SDL2 Window created.~%")
                                       (sdl2:with-renderer (renderer win)

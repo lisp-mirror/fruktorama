@@ -3,7 +3,7 @@
 ;; GPL3
 
 (defstruct window
-  "The WINDOW is the root container for all widgets within a layer."
+  "The WINDOW is the root container for all widgets."
   widget
   active
   id
@@ -18,12 +18,6 @@
 
 (defparameter *WINDOWS* nil
   "Defined windows.")
-
-(defparameter *WINDOW-INPUT-STACK* nil
-  "Windows sorted in input order.")
-
-(defparameter *WINDOW-PAINT-STACK* nil
-  "Windows sorted in paint order.")
 
 (defparameter *WINDOW-STACK* nil
   "All windows sorted in paint order.")
@@ -113,13 +107,15 @@
 
 ; WINDOW -> NIL
 (defun center-window-widget (window)
-  "Puts the window's widget in the center. Called because :PLACE :CENTER."
+  "Puts the window's widget in the center. Called when :PLACE is :CENTER."
   (let ((widget (window-widget window)))
     (let ((x (calc-offset-within *WINDOW-WIDTH* (widget-width widget)))
           (y (calc-offset-within *WINDOW-HEIGHT* (widget-height widget))))
       (setf (widget-x widget) x)
       (setf (widget-y widget) y)
       nil)))
+
+;;------------------------------------------------------------------------------
 
 ; WINDOW -> NIL
 (defun activate (window)
@@ -136,11 +132,15 @@
 (defun flipivate (window)
   (setf (window-active window) (not (window-active window))))
 
+;;------------------------------------------------------------------------------
+
 ; WINDOW -> NIL
-(defun attach-window (window)
+(defun stack-window (window)
   (let ((index (vector-push-extend window *WINDOW-STACK*)))
     (setf (window-stack-index window) index)
     nil))
+
+;;------------------------------------------------------------------------------
 
 (defun register-window (window)
   (when (window-id window)
@@ -156,6 +156,8 @@
         window
         (unless on-failure-nil
           (error "FIND-WINDOW failed to find the window: ~A." id)))))
+
+;;------------------------------------------------------------------------------
 
 ; WINDOW-ID -> WINDOW
 (defun open-window-by-id (id)
@@ -194,6 +196,8 @@
     (when widget
       (widget-event-close widget)))
   window)
+
+;;------------------------------------------------------------------------------
 
 ; (GROUP-ID, WINDOW) -> WINDOW
 (defun add-window-to-group (group window)
@@ -286,7 +290,7 @@
                      (trap-open nil) 
                      (trap-close nil)
                      (group nil))
-  "Creates a window, pushes it on the stack and register it name."
+  "Creates a window, pushes it on the stack and registers its name."
   (let ((window (make-window
              :id id
              :internal-id (gensym)
@@ -312,12 +316,10 @@
                                       (setf (widget-y widget) y)))
                 (otherwise
                   (error "Unknown placement designator ~A." place)))
-      (calculate-absolute-coordinates-in-window window)
-      ;;(register-widgets widget)
-      )
+      (calculate-absolute-coordinates-in-window window))
     (when group
       (add-window-to-group group window))
-    (attach-window window)
+    (stack-window window)
     (register-window window)
     (when visible
       (open-window window))
@@ -367,28 +369,39 @@
 
 ;; (KEY) -> T | NIL
 (defun window-event-onkey-down (key)
-  (let ((handled (bubble-key key)))
+  (bubble-key key :DOWN))
+
+(defun window-event-onkey-up (key)
+  (bubble-key key :UP))
+
+(defun bubble-key (key state)
+  (let ((handled (bubble-key-down-stack key state)))
     (unless handled
       (format t "   KEY DISCARDED.~%"))
     handled))
 
 ;; (KEY) -> T | NIL
-(defun bubble-key (key)
+(defun bubble-key-down-stack (key state)
   (some (lambda (window)
           (when (window-visible window)
             (when (window-active window)
               (format t "Key given to window: ~A.~%" (window-id window))
-              (bubble-into key window))))
+              (bubble-key-window key window state))))
         (reverse *WINDOW-STACK*)))
 
-(defun bubble-into (key window)
-  (if (bubble-callback key window)
+(defun bubble-key-window (key window state)
+  (if (bubble-key-callback key window state)
       t
       (when (window-widget window)
-        (widget-propagate-onkey-down (window-widget window) key))))
+        (case state
+          (:DOWN
+            (widget-propagate-onkey-down (window-widget window) key))
+          (:UP
+            (widget-propagate-onkey-up (window-widget window) key))))))
 
-(defun bubble-callback (key window)
-  (when (window-callback-input window)
-    (when (funcall (window-callback-input window) window key)
-      (format t "Key handled by window trap: ~A.~%" (window-id window))
-      t)))
+(defun bubble-key-callback (key window state)
+  (when (eq state :DOWN)
+    (when (window-callback-input window)
+      (when (funcall (window-callback-input window) window key)
+        (format t "Key handled by window trap: ~A.~%" (window-id window))
+        t))))
