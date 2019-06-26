@@ -2,6 +2,8 @@
 ;; Copyright Parasite Network 2018
 ;; GPL3
 
+(in-package :f3)
+
 (defparameter *HIGHSCORE-PATH* (merge-pathnames "poäng.txt"))  
 
 (defun define-resources (renderer)
@@ -132,7 +134,7 @@
                  (:black-cherry 8 1)
                  (:black-blueberry 9 1))))
 
-(defun define-windows (renderer)
+(defun define-windows ()
   (format t "Defining windows.~%")    
   (let ((red-large-numbers (list :r0 :r1 :r2 :r3 :r4 :r5 :r6 :r7 :r8 :r9))
         (green-large-numbers (list :g0 :g1 :g2 :g3 :g4 :g5 :g6 :g7 :g8 :g9))
@@ -173,14 +175,15 @@
                                                                   :editable t
                                                                   :chevron :chevron)))))
                :trap-input (lambda (window key)
-                             (when (key= key :scancode-return)
-                               (let ((entry (find-widget :winnerbox)))
-                                 (highscore:add
-                                   (get-entry-score entry)
-                                   (get-entry-name entry))
-                                 (highscore:save-to *HIGHSCORE-PATH*)
-                                 (close-window-by-id :enter-highscore)
-                                 (open-window-by-id :highscore)))))
+                             (keycase key 
+                                      (:scancode-return
+                                        (let ((entry (find-widget :winnerbox)))
+                                          (highscore:add
+                                            (get-entry-score entry)
+                                            (get-entry-name entry))
+                                          (highscore:save-to *HIGHSCORE-PATH*)
+                                          (close-window-by-id :enter-highscore)
+                                          (open-window-by-id :highscore))))))
     
     (defwindow :title
                :visible t
@@ -287,7 +290,7 @@
                                                        :emblem :5th-emblem 
                                                        :id :5th))))
                :trap-open (lambda (window)
-                            (let ((widget (window-widget window)))
+                            (let ((widget (get-root-widget window)))
                               (load-higschore-entry 0 (find-widget :1st))
                               (load-higschore-entry 1 (find-widget :2nd))
                               (load-higschore-entry 2 (find-widget :3rd))
@@ -295,16 +298,18 @@
                               (load-higschore-entry 4 (find-widget :5th))
                               nil))
                :trap-input (lambda (window key)
-                             (cond
-                               ((key= key :scancode-c)
-                                (highscore:reset)
-                                (highscore:save-to *HIGHSCORE-PATH*)
-                                (open-window-by-id :highscore)
-                                t)
-                               ((key= key :scancode-escape)
-                                 (close-window-by-id :highscore)
-                                 (open-window-by-id :start-menu)
-                                 t))))
+                             (keycase key
+                                      (:scancode-c
+                                        (highscore:reset)
+                                        (highscore:save-to *HIGHSCORE-PATH*)
+                                        (open-window-by-id :highscore)
+                                        t)
+                                      (:scancode-escape
+                                        (close-window-by-id :highscore)
+                                        (open-window-by-id :start-menu)
+                                        t)
+                                      (t
+                                        (format t "Press ESCAPE to exit.~%")))))
     
     (defwindow :help
                :active t
@@ -361,69 +366,7 @@
                                       (list :yellow-star :red-star)
                                       :startx (- (/ *WINDOW-WIDTH* 2) 25) 
                                       :starty -50)
-                                    (make-image :sky))))
-    
-    (defwindow :global-hotkeys
-               :visible t
-               :active t
-               :trap-input (lambda (window key)
-                             (cond
-                               ((key= key :scancode-d)
-                                (setf *DEBUG-WIDGET-BORDER* (not *DEBUG-WIDGET-BORDER*))
-                                t)
-                               ((key= key :scancode-l)
-                                (setf *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE* (not *DEBUG-MOUSE-XY-PRINT-WIDGET-TREE*))
-                                t)
-                               ((key= key :scancode-a)
-                                (debug-print-active-windows)
-                                t)
-                               ((key= key :scancode-w)
-                                (debug-print-all-windows)
-                                t)
-                               ((key= key :scancode-v)
-                                (debug-print-visible-windows)
-                                t))))
-    
-    (initialize-windows)))
-  
-(defun gameloop (renderer)        
-  (format t "Entering game loop.~%")
-  (sdl2:with-event-loop (:method :poll)
-                        (:quit () t)
-                        
-                        ;; KEY
-                        (:keydown (:keysym keysym)
-                                  (format t "Key DOWN: (~A) ~A.~%"
-                                          (sdl2:scancode-value keysym)
-                                          (sdl2:scancode keysym))                                  
-                                  (window-event-onkey-down keysym))
-                        (:keyup (:keysym keysym)
-                                (format t "Key UP: (~A) ~A.~%"
-                                        (sdl2:scancode-value keysym)
-                                        (sdl2:scancode keysym))                                  
-                                (window-event-onkey-up keysym))
-                        
-                        ;; MOUSE
-                        (:mousemotion (:timestamp timestamp :x x :y y)
-                                      (track-mouse-movement x y))
-                        (:mousebuttondown (:timestamp timestamp :state state :button button :x x :y y)
-                                          (track-mouse-button-down button x y))
-                        (:mousebuttonup (:timestamp timestamp :state state :button button :x x :y y)
-                                        (track-mouse-button-up button x y))
-                        
-                        ;; EVENTS
-                        (:windowevent (:event event :type type :timestamp timestamp :data1 data1 :data2 data2)
-                                      (format t "Window event: ~A.~%" (translate-window-event event))
-                                      (cond
-                                        ((eq event !MOUSE-LEAVE!)
-                                         (track-mouse-movement -1 -1))))
-
-                        (:idle ()
-                               (let ((tick (get-internal-real-time)))
-                                 (sdl2:set-render-draw-color renderer 255 0 60 0)
-                                 (sdl2:render-clear renderer)
-                                 (paint-all-windows renderer tick :debug-borders *debug-widget-border*)                                 
-                                 (sdl2:render-present renderer)))))
+                                    (make-image :sky))))))
     
 (defun start ()
   (format t "Starting F3.~%")
@@ -437,34 +380,7 @@
                             (1 "KÜK")))
   (highscore:load-from *HIGHSCORE-PATH*)
   (format t "Highscore loaded.~%")
-  (initialize-sprites)
-  (format t "Sprites initialized.~%")
-  (glas-initialize-mouse-defaults)
-  (format t "Mouse support initialized.~%")
-  (glas-initialize-widget-defaults)
-  (format t "Widgets initialized.~%")
-  (glas-initialize-window-defaults 190 419)
-  (format t "Windows initialized.~%")
-  (unwind-protect 
-    (sdl2:with-init (:everything)
-                    (format t "SDL2 initialized.~%")
-                    (sdl2-image:init '(:png))
-                    (format t "SDL2-Image initialized.~%")
-                    ;(setf *window-width* 190)
-                    ;(setf *window-height* 419)
-                    (sdl2:with-window (win :w *window-width* :h *window-height* :title "F3" :flags '(:shown))
-                                      (format t "SDL2 Window created.~%")
-                                      (sdl2:with-renderer (renderer win)
-                                                          (handler-case
-                                                            (progn
-                                                              (define-resources renderer)
-                                                              (define-windows renderer)
-                                                              (gameloop renderer))
-                                                            (error (e)
-                                                                   (format t "Caught error: ~A~%" e)
-                                                                   (format t "ABORT!~%"))))))
-    (destroy-textures)
-    (format t "Tjingeling.~%")))
+  (glas:glas-go "F3" 190 419 #'define-resources #'define-windows))
 
 (defun x ()
   (ql:quickload "f3"))

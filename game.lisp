@@ -1,3 +1,8 @@
+;; game.lisp
+;; Copyright Parasite Network 2019
+;; GPL3
+
+(in-package :f3)
 
 (defstruct grid
   array
@@ -416,7 +421,7 @@
         do (incf i 1)
         finally (return i)))
 
-(defstruct (game-widget (:include widget))
+(defstruct (game-widget (:include glas:widget))
   background-pixmap
   grid
   status

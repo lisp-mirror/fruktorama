@@ -2,6 +2,7 @@
 ;; Copyright Parasite Network 2018
 ;; GPL3
 
+(in-package :f3)
 
 ;;------------------------------------------------------------------------------
 ;; FLIP-WIDIGT
@@ -23,8 +24,8 @@
                                      :id id
                                      :opaque t
                                      :opaque-draw-exception nil
-                                     :width (charmap-descriptor-width charmap)
-                                     :height (charmap-descriptor-height charmap))))
+                                     :width (pixmap-width charmap) ;;(charmap-descriptor-width charmap)
+                                     :height (pixmap-height charmap)))) ;;(charmap-descriptor-height charmap))))
     flipper))
 
 (defun set-flipper-key (widget key)
@@ -132,18 +133,18 @@
           'string))
 
 (defmethod widget-event-onkey-down ((widget tag-widget) key)
-  (cond
-    ((key= key :scancode-left)
-     (switch-tag-by-offset widget -1)
-     t)
-    ((key= key :scancode-right)
-     (switch-tag-by-offset widget +1)
-     t)
-    (t
-      (widget-propagate-onkey-down
-        (aref (tag-widget-flippers widget) 
-              (tag-widget-selected widget))
-        key))))
+  (keycase key
+           (:scancode-left
+             (switch-tag-by-offset widget -1)
+             t)
+           (:scancode-right
+             (switch-tag-by-offset widget +1)
+             t)
+           (t
+             (widget-propagate-onkey-down
+               (aref (tag-widget-flippers widget) 
+                     (tag-widget-selected widget))
+               key))))
 
 ;;------------------------------------------------------------------------------
 ;; RENAME PICTUREBOOK-WIDGET
@@ -541,7 +542,7 @@
                                      :pos (list (star-rain-widget-startx widget) 
                                                 (star-rain-widget-starty widget))
                                      :transform-x (lambda (sprite tick)
-                                                    (+ (sprite-descriptor-x sprite)
+                                                    (+ (sprite-x sprite)
                                                        (floor (* (* 50 (star-particle-rotation sprite))
                                                                  (sin (/ tick 1000.0)))))))))
     particle2))

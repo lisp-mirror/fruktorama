@@ -4,18 +4,13 @@
   :author "Parasite Network"
   :license "GPL3"
 
-  :depends-on (:sdl2 :sdl2-image alexandria)
+  :depends-on (glas alexandria)
   :pathname ""
   :serial t
 
   :components
-  (
-    (:file "highscore")
-    (:file "sprite")
-    (:file "mouse")
-    (:file "widget")
-    (:file "window")
-    (:file "gadgets")
-    (:file "game")
-    (:file "f3")
-    ))
+  ((:file "package")
+   (:file "highscore")
+   (:file "gadgets")
+   (:file "game")
+   (:file "f3")))
