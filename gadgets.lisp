@@ -526,7 +526,7 @@
                   (setf dice% (alexandria:shuffle (copy-list *T3*)))))))
 
 (defstruct (star-particle (:include sprite-descriptor) (:constructor %new-star-particle))
-  (|PARENT| 'sprite-descriptor)
+  (|PARENT-STAR-PARTICLE| 'sprite-descriptor)
   (rotation (nth (random 2) '(-1 1))))
 
 (defun make-star-particle (widget)
@@ -538,13 +538,15 @@
   (let ((particle2 (initialize-sprite particle
                                      (aref (star-rain-widget-pixmaps widget) 
                                            (random (length (star-rain-widget-pixmaps widget))))
+                                     :type :STAR
                                      :velocity #(0 70)
                                      :pos (list (star-rain-widget-startx widget) 
                                                 (star-rain-widget-starty widget))
-                                     :transform-x (lambda (sprite tick)
+                                     ;; (LAMBDA (SPRITE X TICKSTART TICKNOW TICKDIFF))
+                                     :transform-x (lambda (sprite x tickstart ticknow tickdiff)
                                                     (+ (sprite-x sprite)
                                                        (floor (* (* 50 (star-particle-rotation sprite))
-                                                                 (sin (/ tick 1000.0)))))))))
+                                                                 (sin (/ ticknow 1000.0)))))))))
     particle2))
 
 (defun add-star (widget)
