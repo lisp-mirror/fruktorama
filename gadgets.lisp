@@ -155,12 +155,14 @@
 
 ; (&KEY) -> FLIPBOOK-WIDGET
 (defun make-flipbook (&key id images (initial 0))
+  (format t "Make FLIPBOOK-WIDGET (~A).~%" id)
   (let ((widget (initialize-flipbook (make-flipbook-widget) id images initial)))
     (format t " Created FLIPBOOK-WIDGET: ~A.~%" id)
     widget))
 
 ; (...) -> FLIPBOOK-WIDGET
 (defun initialize-flipbook (widget id images initial)
+  (format t "Initialize FLIPBOOK-WIDGET (~A).~%" id)
   (unless (numberp initial)
     (error "FLIPBOOK-WIDGET (~A): Initial value is not a NUMBER: ~A." id initial))
   (unless (verify-images-existence images)
@@ -203,6 +205,7 @@
   links)
 
 (defun make-display (images &key id (digits 5))
+  (format t "Make DISPLAY-WIDGET (~A).~%" id)
   (unless (verify-images-existence images)
     (error "DISPLAY-WIDGET (~A): IMAGES contain invalid images: ~A.~%" id images))
   (unless (verify-images-same-dimensions images)
@@ -236,6 +239,7 @@
   digits)
 
 (defun make-scoreboard (images &key id (digits 5) (initial 0) (events nil))
+  (format t " Make SCOREBOARD-WIDGET (~A).~%" id)
   (let ((widget (initialize-scoreboard (make-scoreboard-widget) 
                                        images
                                        id 
@@ -246,6 +250,7 @@
     widget))
 
 (defun initialize-scoreboard (widget images id digits initial events)
+  (format t "Initialize SCOREBOARD-WIDGET (~A).~%" id)
   (unless (or (numberp digits) (> digits 0))
     (error "SCOREBOARD-WIDGET (~A) (&key DIGITS): Must be a positive number: ~A~%" id digits))
   (unless (or (numberp initial) (>= initial 0))
@@ -305,6 +310,7 @@
   secondary-display)
 
 (defun make-highscore (low-images high-images &key id (digits 5) (initial 0) (events nil))
+  (format t "Make HIGHSCORE-WIDGET.~%")
   (let ((board (initialize-highscore (make-highscore-widget)
                                      low-images
                                      high-images
@@ -316,6 +322,7 @@
     board))
 
 (defun initialize-highscore (widget low-images high-images id digits initial events)
+  (format t "Initialize HIGHSCORE-WIDGET (~A).~%" id)
   (unless (verify-images-same-dimensions low-images high-images)
     (error "HIGHSCORE-WIDGET (~A): Images for low score and high score must be of the same dimensions: ~A ~A~%" id low-images high-images))
   (let ((board (initialize-struct (initialize-scoreboard widget low-images id digits initial events)
